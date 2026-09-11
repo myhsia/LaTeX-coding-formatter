@@ -1,0 +1,53 @@
+name: build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            suffix: windows-x86_64
+            ext: .exe
+          - os: macos-latest
+            suffix: macos-arm64
+            ext: ''
+          - os: ubuntu-latest
+            suffix: linux-x86_64
+            ext: ''
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pyinstaller
+      - name: Build GUI (onefile, windowed)
+        run: >
+          pyinstaller --onefile --windowed --name format-tex-gui
+          --distpath dist --workpath pyibuild --specpath pyibuild
+          format_tex_gui.py
+      - name: Build CLI (onefile)
+        run: >
+          pyinstaller --onefile --name format-tex
+          --distpath dist --workpath pyibuild --specpath pyibuild
+          format_tex.py
+      - name: Rename artifacts
+        shell: bash
+        run: |
+          mv "dist/format-tex-gui${{ matrix.ext }}" "dist/format-tex-gui-${{ matrix.suffix }}${{ matrix.ext }}"
+          mv "dist/format-tex${{ matrix.ext }}" "dist/format-tex-${{ matrix.suffix }}${{ matrix.ext }}"
+      - name: Smoke test CLI
+        shell: bash
+        run: |
+          printf '\xe4\xb8\xad\xe6\x96\x87English\xe4\xb8\xad\xe6\x96\x87\n' > smoke.tex
+          ./dist/format-tex-${{ matrix.suffix }}${{ matrix.ext }} --no-backup smoke.tex
+          grep -q $'\xe4\xb8\xad\xe6\x96\x87 English \xe4\xb8\xad\xe6\x96\x87' smoke.tex
+      - uses: actions/upload-artifact@v4
+        with:
+          name: format-tex-${{ matrix.suffix }}
+          path: dist/*

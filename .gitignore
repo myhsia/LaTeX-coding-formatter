@@ -1,0 +1,22 @@
+.DS_Store
+__pycache__/
+*.pyc
+dist/
+pyibuild/
+*.spec
+
+*.pdf
+*.eps
+*.zip
+*.ttf
+*.ttc
+*.synctex.gz
+*.aux
+*.log
+*.out
+*.bbl
+*.blg
+main.tex
+aas.cls
+picins.sty
+LaTeX 排版注意事项.md
