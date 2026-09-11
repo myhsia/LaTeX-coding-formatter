@@ -23,6 +23,9 @@ Rules
 
 Never modified: verbatim environments, % comments, ``...'' quoted spans.
 
+The CLI forces UTF-8 on stdout/stderr so CJK output works on Windows
+consoles and pipes (cp1252).
+
 Usage
 -----
     python3 format_tex.py file.tex [more.tex ...]          format in place
@@ -204,7 +207,17 @@ def process_file(path, check, opts=None):
     return False, True
 
 
+def _use_utf8_stdio():
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if stream is not None and hasattr(stream, 'reconfigure'):
+                stream.reconfigure(encoding='utf-8')
+        except (OSError, ValueError):
+            pass
+
+
 def main(argv=None):
+    _use_utf8_stdio()
     parser = argparse.ArgumentParser(
         description='Insert CJK/Latin spacing in TeX files '
                     '(run with --help to see the full rule set).')
