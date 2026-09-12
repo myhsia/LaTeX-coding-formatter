@@ -13,9 +13,11 @@ import sys
 import tkinter as tk
 import tkinter.font as tkfont
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 
 from format_tex import FormatOptions, format_file
+
+ENCODINGS = ['utf-8', 'gb18030', 'gbk', 'gb2312', 'big5', 'utf-16', 'latin-1']
 
 
 class App:
@@ -66,6 +68,19 @@ class App:
                                                 sticky='w', padx=8, pady=2)
         options.columnconfigure(0, weight=1)
         options.columnconfigure(1, weight=1)
+
+        enc_frame = tk.LabelFrame(root, text='文件编码')
+        enc_frame.pack(fill='x', padx=8, pady=(0, 6))
+        tk.Label(enc_frame, text='输入编码').pack(side='left', padx=(8, 2))
+        self.enc_in = ttk.Combobox(enc_frame, values=ENCODINGS, width=12)
+        self.enc_in.set('utf-8')
+        self.enc_in.pack(side='left')
+        tk.Label(enc_frame, text='输出编码').pack(side='left', padx=(16, 2))
+        self.enc_out = ttk.Combobox(enc_frame, values=ENCODINGS, width=12)
+        self.enc_out.set('utf-8')
+        self.enc_out.pack(side='left')
+        tk.Label(enc_frame, text='(默认 utf-8; 也可输入任意编码名, 如 gb18030)').pack(
+            side='left', padx=(10, 8))
 
         actions = tk.Frame(root)
         actions.pack(fill='x', padx=8, pady=(0, 4))
@@ -134,6 +149,8 @@ class App:
             commands=self.var_commands.get(),
             tight_ranges=self.var_tight.get(),
             backup=self.var_backup.get(),
+            read_encoding=self.enc_in.get().strip(),
+            write_encoding=self.enc_out.get().strip(),
         )
 
         results = []
@@ -152,7 +169,7 @@ class App:
                         fromfile=str(path) + ' (原文件)',
                         tofile=str(path) + ' (格式化后)', lineterm=''))
                     entry['changed'] = bool(entry['diff'])
-                except (ValueError, OSError) as exc:
+                except (ValueError, OSError, LookupError) as exc:
                     entry['error'] = str(exc)
             results.append(entry)
 
@@ -163,6 +180,7 @@ class App:
             will_write = False
 
         self.clear_output()
+        write_errors = 0
         for e in results:
             self.append('== {} ==\n'.format(e['path']))
             if e['error']:
@@ -173,17 +191,24 @@ class App:
                 continue
             self.append('\n'.join(e['diff']) + '\n')
             if will_write:
+                try:
+                    data = e['result'].encode(opts.write_encoding)
+                except (ValueError, LookupError) as exc:
+                    self.append('错误: 无法以 {} 编码输出: {}\n\n'.format(
+                        opts.write_encoding, exc))
+                    write_errors += 1
+                    continue
                 if opts.backup:
                     backup = e['path'].with_name(e['path'].name + '.bak')
                     if not backup.exists():
                         shutil.copy2(e['path'], backup)
-                with open(e['path'], 'w', encoding='utf-8', newline='') as fh:
-                    fh.write(e['result'])
+                with open(e['path'], 'wb') as fh:
+                    fh.write(data)
                 self.append('>>> 已写入 ({} 处插入)\n\n'.format(e['count']))
             else:
                 self.append('>>> 需 {} 处修改 [未写入]\n\n'.format(e['count']))
 
-        errors = sum(1 for e in results if e['error'])
+        errors = sum(1 for e in results if e['error']) + write_errors
         unchanged = sum(1 for e in results if not e['error'] and not e['changed'])
         suffix = '  [仅检查模式]' if self.var_check.get() else ''
         self.set_status('需修改: {}  已符合: {}  错误: {}{}'.format(

@@ -32,6 +32,8 @@ Usage
     python3 format_tex.py --check file.tex [more.tex ...]  report only
     python3 format_tex.py --no-punct --no-commands --loose-ranges
                           --no-backup file.tex             toggle rule sets
+    python3 format_tex.py --input-encoding gb2312
+                          --output-encoding utf-8 file.tex choose encodings
 """
 
 import argparse
@@ -63,6 +65,8 @@ class FormatOptions:
     commands: bool = True
     tight_ranges: bool = True
     backup: bool = True
+    read_encoding: str = 'utf-8'
+    write_encoding: str = 'utf-8'
 
 
 class Protector:
@@ -114,6 +118,11 @@ def apply_spacing(text, punct=True, commands=True):
     math_ph = '\x00M\\d+\x01'
     verb_ph = '\x00V\\d+\x01'
 
+    def latin_math(m):
+        if m.group(1).startswith('\\'):
+            return m.group(0)
+        return m.group(1) + ' ' + m.group(2)
+
     def latin_verb(m):
         if m.group(1).startswith('\\'):
             return m.group(0)
@@ -133,7 +142,6 @@ def apply_spacing(text, punct=True, commands=True):
     rules += [
         (f'({cjk})({math_ph})', r'\1 \2'),
         (f'({math_ph})({cjk})', r'\1 \2'),
-        (f'({lat})({math_ph})', r'\1 \2'),
         (f'({math_ph})({lat})', r'\1 \2'),
         (f'({cjk})({verb_ph})', r'\1~\2'),
         (f'({cjk})[ \\t]+({verb_ph})', r'\1~\2'),
@@ -146,6 +154,11 @@ def apply_spacing(text, punct=True, commands=True):
     for pattern, repl in rules:
         text, n = re.subn(pattern, repl, text)
         total += n
+
+    text, n = re.subn(
+        r'((?:\\[A-Za-z]+)|[A-Za-z0-9])(' + math_ph + ')',
+        latin_math, text)
+    total += n
 
     text, n = re.subn(
         r'((?:\\[A-Za-z]+)|[A-Za-z0-9])(' + verb_ph + ')',
@@ -165,7 +178,8 @@ def format_source(source, opts=None):
 def format_file(path, opts=None):
     """Read a file and return (source, result, count); raises on IO,
     encoding or unbalanced-$ errors."""
-    with open(path, encoding='utf-8', newline='') as fh:
+    opts = opts or FormatOptions()
+    with open(path, encoding=opts.read_encoding, newline='') as fh:
         source = fh.read()
     result, count = format_source(source, opts)
     return source, result, count
@@ -175,7 +189,7 @@ def process_file(path, check, opts=None):
     opts = opts or FormatOptions()
     try:
         source, result, count = format_file(path, opts)
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, LookupError) as exc:
         print('{}: ERROR: {}'.format(path, exc))
         return True, False
 
@@ -197,13 +211,19 @@ def process_file(path, check, opts=None):
     print('\n'.join(diff))
 
     if not check:
+        try:
+            data = result.encode(opts.write_encoding)
+        except (ValueError, LookupError) as exc:
+            print('{}: ERROR: cannot encode output as {}: {}'.format(
+                path, opts.write_encoding, exc))
+            return True, False
         if opts.backup:
             backup = path.with_name(path.name + '.bak')
             if not backup.exists():
                 shutil.copy2(path, backup)
                 print('{}: original saved to {}'.format(path, backup))
-        with open(path, 'w', encoding='utf-8', newline='') as fh:
-            fh.write(result)
+        with open(path, 'wb') as fh:
+            fh.write(data)
     return False, True
 
 
@@ -233,12 +253,18 @@ def main(argv=None):
                         help='space page-range dashes too (1820 $-$ 1830)')
     parser.add_argument('--no-backup', action='store_true',
                         help='do not create a .bak backup before writing')
+    parser.add_argument('--input-encoding', metavar='NAME', default='utf-8',
+                        help='encoding of the input file(s) (default: utf-8)')
+    parser.add_argument('--output-encoding', metavar='NAME', default='utf-8',
+                        help='encoding for the written file(s) (default: utf-8)')
     args = parser.parse_args(argv)
     opts = FormatOptions(
         punct=not args.no_punct,
         commands=not args.no_commands,
         tight_ranges=not args.loose_ranges,
         backup=not args.no_backup,
+        read_encoding=args.input_encoding,
+        write_encoding=args.output_encoding,
     )
 
     code = 0
