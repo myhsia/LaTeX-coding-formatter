@@ -8,8 +8,10 @@ Usage
 """
 
 import difflib
+import os
 import shutil
 import sys
+import traceback
 import tkinter as tk
 import tkinter.font as tkfont
 from pathlib import Path
@@ -25,6 +27,7 @@ class App:
 
     def __init__(self, root):
         self.root = root
+        root.report_callback_exception = self.report_callback_exception
         root.title('TeX 中英文混排格式化工具')
         root.geometry('940x680')
         root.minsize(720, 520)
@@ -113,6 +116,29 @@ class App:
     def set_status(self, text):
         self.status.set(text)
 
+    def log_path(self):
+        cwd = Path.cwd()
+        if os.access(cwd, os.W_OK):
+            return cwd / 'format_tex_gui.log'
+        return Path.home() / 'format_tex_gui.log'
+
+    def report_callback_exception(self, exc_type, exc_value, exc_tb):
+        self.show_error(''.join(
+            traceback.format_exception(exc_type, exc_value, exc_tb)))
+
+    def show_error(self, text):
+        try:
+            self.append('[内部错误]\n{}\n'.format(text))
+            last = text.splitlines()[-1] if text else ''
+            self.set_status('内部错误: {}'.format(last))
+        except Exception:
+            pass
+        try:
+            with open(self.log_path(), 'a', encoding='utf-8') as fh:
+                fh.write(text + '\n')
+        except Exception:
+            pass
+
     def append(self, text):
         self.output.configure(state='normal')
         self.output.insert('end', text)
@@ -146,6 +172,12 @@ class App:
         return None if (not value or value == '同输入') else value
 
     def run(self, write):
+        try:
+            self._run(write)
+        except Exception:
+            self.show_error(traceback.format_exc())
+
+    def _run(self, write):
         paths = [Path(p) for p in self.file_list.get(0, tk.END)]
         if not paths:
             self.set_status('请先选择 TeX 文件')
@@ -175,8 +207,8 @@ class App:
                         fromfile=str(path) + ' (原文件)',
                         tofile=str(path) + ' (格式化后)', lineterm=''))
                     entry['changed'] = bool(entry['diff'])
-                except (ValueError, OSError, LookupError) as exc:
-                    entry['error'] = str(exc)
+                except Exception as exc:
+                    entry['error'] = '{}: {}'.format(type(exc).__name__, exc)
             results.append(entry)
 
         will_write = write and not self.var_check.get()
