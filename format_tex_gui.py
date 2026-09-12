@@ -17,7 +17,8 @@ from tkinter import filedialog, messagebox, ttk
 
 from format_tex import FormatOptions, format_file
 
-ENCODINGS = ['utf-8', 'gb18030', 'gbk', 'gb2312', 'big5', 'utf-16', 'latin-1']
+ENCODINGS = ['同输入', 'utf-8', 'gb18030', 'gbk', 'gb2312', 'big5',
+             'utf-16', 'latin-1']
 
 
 class App:
@@ -77,9 +78,10 @@ class App:
         self.enc_in.pack(side='left')
         tk.Label(enc_frame, text='输出编码').pack(side='left', padx=(16, 2))
         self.enc_out = ttk.Combobox(enc_frame, values=ENCODINGS, width=12)
-        self.enc_out.set('utf-8')
+        self.enc_out.set('同输入')
         self.enc_out.pack(side='left')
-        tk.Label(enc_frame, text='(默认 utf-8; 也可输入任意编码名, 如 gb18030)').pack(
+        tk.Label(enc_frame, text='(输入默认 utf-8; 输出默认同输入编码, '
+                                 '也可输入任意编码名)').pack(
             side='left', padx=(10, 8))
 
         actions = tk.Frame(root)
@@ -139,6 +141,10 @@ class App:
         self.clear_output()
         self.set_status('列表已清空')
 
+    def write_encoding(self):
+        value = self.enc_out.get().strip()
+        return None if (not value or value == '同输入') else value
+
     def run(self, write):
         paths = [Path(p) for p in self.file_list.get(0, tk.END)]
         if not paths:
@@ -150,7 +156,7 @@ class App:
             tight_ranges=self.var_tight.get(),
             backup=self.var_backup.get(),
             read_encoding=self.enc_in.get().strip(),
-            write_encoding=self.enc_out.get().strip(),
+            write_encoding=self.write_encoding(),
         )
 
         results = []
@@ -191,11 +197,12 @@ class App:
                 continue
             self.append('\n'.join(e['diff']) + '\n')
             if will_write:
+                out_enc = opts.effective_write_encoding()
                 try:
-                    data = e['result'].encode(opts.write_encoding)
+                    data = e['result'].encode(out_enc)
                 except (ValueError, LookupError) as exc:
                     self.append('错误: 无法以 {} 编码输出: {}\n\n'.format(
-                        opts.write_encoding, exc))
+                        out_enc, exc))
                     write_errors += 1
                     continue
                 if opts.backup:
@@ -204,7 +211,8 @@ class App:
                         shutil.copy2(e['path'], backup)
                 with open(e['path'], 'wb') as fh:
                     fh.write(data)
-                self.append('>>> 已写入 ({} 处插入)\n\n'.format(e['count']))
+                self.append('>>> 已写入 ({}, {} 处插入)\n\n'.format(
+                    out_enc, e['count']))
             else:
                 self.append('>>> 需 {} 处修改 [未写入]\n\n'.format(e['count']))
 

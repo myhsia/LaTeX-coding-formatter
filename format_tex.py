@@ -34,6 +34,8 @@ Usage
                           --no-backup file.tex             toggle rule sets
     python3 format_tex.py --input-encoding gb2312
                           --output-encoding utf-8 file.tex choose encodings
+                          (input default: utf-8; output default: same
+                          as the input encoding)
 """
 
 import argparse
@@ -43,6 +45,7 @@ import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 HAN = '\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff'
 SENT = '.,;:!?'
@@ -59,14 +62,20 @@ PLACEHOLDER_RE = re.compile('\x00([SVMT])(\\d+)\x01')
 
 @dataclass
 class FormatOptions:
-    """Formatting toggles; the defaults reproduce the rules as applied."""
+    """Formatting toggles; the defaults reproduce the rules as applied.
+
+    ``write_encoding=None`` means "write back in ``read_encoding``".
+    """
 
     punct: bool = True
     commands: bool = True
     tight_ranges: bool = True
     backup: bool = True
     read_encoding: str = 'utf-8'
-    write_encoding: str = 'utf-8'
+    write_encoding: Optional[str] = None
+
+    def effective_write_encoding(self):
+        return self.write_encoding or self.read_encoding
 
 
 class Protector:
@@ -211,11 +220,12 @@ def process_file(path, check, opts=None):
     print('\n'.join(diff))
 
     if not check:
+        out_enc = opts.effective_write_encoding()
         try:
-            data = result.encode(opts.write_encoding)
+            data = result.encode(out_enc)
         except (ValueError, LookupError) as exc:
             print('{}: ERROR: cannot encode output as {}: {}'.format(
-                path, opts.write_encoding, exc))
+                path, out_enc, exc))
             return True, False
         if opts.backup:
             backup = path.with_name(path.name + '.bak')
@@ -224,6 +234,7 @@ def process_file(path, check, opts=None):
                 print('{}: original saved to {}'.format(path, backup))
         with open(path, 'wb') as fh:
             fh.write(data)
+        print('{}: written as {}'.format(path, out_enc))
     return False, True
 
 
@@ -255,8 +266,9 @@ def main(argv=None):
                         help='do not create a .bak backup before writing')
     parser.add_argument('--input-encoding', metavar='NAME', default='utf-8',
                         help='encoding of the input file(s) (default: utf-8)')
-    parser.add_argument('--output-encoding', metavar='NAME', default='utf-8',
-                        help='encoding for the written file(s) (default: utf-8)')
+    parser.add_argument('--output-encoding', metavar='NAME', default=None,
+                        help='encoding for the written file(s) '
+                             '(default: same as --input-encoding)')
     args = parser.parse_args(argv)
     opts = FormatOptions(
         punct=not args.no_punct,

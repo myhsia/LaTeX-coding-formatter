@@ -65,8 +65,9 @@ PyInstaller 不支持跨平台编译, Windows/Linux 版本通过 CI 在对应系
 
 GUI: 点击 "选择文件…" 添加 TeX 文件, 按需勾选选项,
 "预览差异" 查看将做的修改, "应用格式化" 写回文件 (默认生成 `.bak` 备份)。
-"文件编码" 栏可选择输入/输出文件编码 (默认均为 utf-8), 内置 gb18030、gbk、
-gb2312、big5、utf-16、latin-1 等预设, 也可输入任意编码名。
+"文件编码" 栏可选择输入/输出文件编码: 输入默认 utf-8, 输出默认 "同输入"
+(即与输入编码一致), 内置 gb18030、gbk、gb2312、big5、utf-16、latin-1
+等预设, 也可输入任意编码名。
 
 命令行:
 
@@ -74,6 +75,7 @@ gb2312、big5、utf-16、latin-1 等预设, 也可输入任意编码名。
 format-tex file.tex                # 就地格式化 (生成 .bak 备份)
 format-tex --check file.tex        # 只报告, 不写入
 format-tex --no-punct --no-commands --loose-ranges --no-backup file.tex
+format-tex --input-encoding gb2312 file.ctx        # 输出默认同输入编码
 format-tex --input-encoding gb2312 --output-encoding utf-8 file.ctx
 ```
 
