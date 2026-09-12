@@ -23,6 +23,39 @@ ENCODINGS = ['同输入', 'utf-8', 'gb18030', 'gbk', 'gb2312', 'big5',
              'utf-16', 'latin-1']
 EXTENSIONS = ['.tex', '.ctx', '.sty', '.cls', '.txt']
 
+LIGHT = {
+    'text_bg': '#fafafa', 'text_fg': '#1a1a1a', 'insert': '#000000',
+    'list_bg': '#ffffff', 'list_fg': '#1a1a1a',
+    'status_bg': '#f0f0f0', 'status_fg': '#1a1a1a',
+    'add': '#098658', 'del': '#a31515', 'meta': '#0550ae',
+}
+DARK = {
+    'text_bg': '#1e1e1e', 'text_fg': '#d4d4d4', 'insert': '#d4d4d4',
+    'list_bg': '#252526', 'list_fg': '#d4d4d4',
+    'status_bg': '#2d2d2d', 'status_fg': '#d4d4d4',
+    'add': '#4ec9b0', 'del': '#f48771', 'meta': '#569cd6',
+}
+
+
+def detect_dark(root):
+    for name in ('systemTextBackgroundColor', 'systemWindowBackground'):
+        try:
+            r, g, b = root.winfo_rgb(name)
+            return (r + g + b) / 3 < 32768
+        except Exception:
+            continue
+    return False
+
+
+def diff_tag(line):
+    if line.startswith(('+++', '---', '@@')):
+        return 'meta'
+    if line.startswith('+'):
+        return 'add'
+    if line.startswith('-'):
+        return 'del'
+    return None
+
 
 class App:
 
@@ -34,6 +67,7 @@ class App:
         root.minsize(720, 520)
 
         fixed = tkfont.nametofont('TkFixedFont')
+        self.pal = DARK if detect_dark(root) else LIGHT
 
         top = tk.Frame(root)
         top.pack(fill='x', padx=8, pady=(8, 4))
@@ -55,7 +89,9 @@ class App:
 
         list_frame = tk.Frame(root)
         list_frame.pack(fill='x', padx=8)
-        self.file_list = tk.Listbox(list_frame, height=6)
+        self.file_list = tk.Listbox(
+            list_frame, height=6,
+            background=self.pal['list_bg'], foreground=self.pal['list_fg'])
         list_scroll = tk.Scrollbar(list_frame, command=self.file_list.yview)
         self.file_list.configure(yscrollcommand=list_scroll.set)
         self.file_list.pack(side='left', fill='x', expand=True)
@@ -109,7 +145,14 @@ class App:
         out_frame = tk.Frame(root)
         out_frame.pack(fill='both', expand=True, padx=8)
         self.output = tk.Text(out_frame, font=fixed, wrap='none',
-                              state='disabled', background='#fafafa')
+                              state='disabled',
+                              background=self.pal['text_bg'],
+                              foreground=self.pal['text_fg'],
+                              insertbackground=self.pal['insert'])
+        for tag, color in (('add', self.pal['add']),
+                           ('del', self.pal['del']),
+                           ('meta', self.pal['meta'])):
+            self.output.tag_configure(tag, foreground=color)
         y_scroll = tk.Scrollbar(out_frame, command=self.output.yview)
         x_scroll = tk.Scrollbar(out_frame, command=self.output.xview,
                                 orient='horizontal')
@@ -122,8 +165,11 @@ class App:
         out_frame.columnconfigure(0, weight=1)
 
         self.status = tk.StringVar(value='就绪')
-        tk.Label(root, textvariable=self.status, anchor='w',
-                 relief='sunken').pack(fill='x', side='bottom')
+        self.status_label = tk.Label(
+            root, textvariable=self.status, anchor='w', relief='sunken',
+            background=self.pal['status_bg'],
+            foreground=self.pal['status_fg'])
+        self.status_label.pack(fill='x', side='bottom')
 
     def set_status(self, text):
         self.status.set(text)
@@ -154,6 +200,11 @@ class App:
     def append(self, text):
         self.output.configure(state='normal')
         self.output.insert('end', text)
+        self.output.configure(state='disabled')
+
+    def append_tagged(self, text, tag):
+        self.output.configure(state='normal')
+        self.output.insert('end', text, (tag,) if tag else ())
         self.output.configure(state='disabled')
 
     def clear_output(self):
@@ -260,7 +311,9 @@ class App:
             if not e['changed']:
                 self.append('已符合格式, 无需修改\n\n')
                 continue
-            self.append('\n'.join(e['diff']) + '\n')
+            for line in e['diff']:
+                self.append_tagged(line + '\n', diff_tag(line))
+            self.append('\n')
             if will_write:
                 out_enc = opts.effective_write_encoding()
                 try:
