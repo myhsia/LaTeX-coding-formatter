@@ -17,10 +17,11 @@ import tkinter.font as tkfont
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from format_tex import FormatOptions, format_file
+from format_tex import FormatOptions, format_file, scan_directory
 
 ENCODINGS = ['同输入', 'utf-8', 'gb18030', 'gbk', 'gb2312', 'big5',
              'utf-16', 'latin-1']
+EXTENSIONS = ['.tex', '.ctx', '.sty', '.cls', '.txt']
 
 
 class App:
@@ -38,8 +39,19 @@ class App:
         top.pack(fill='x', padx=8, pady=(8, 4))
         tk.Button(top, text='选择文件…', command=self.add_files,
                   width=12).pack(side='left')
+        tk.Button(top, text='扫描目录…', command=self.scan_dir,
+                  width=12).pack(side='left', padx=(6, 0))
+        tk.Label(top, text='扩展名').pack(side='left', padx=(14, 2))
+        self.var_ext = tk.StringVar(value='.tex')
+        self.var_recursive = tk.BooleanVar(value=False)
+        ext_box = ttk.Combobox(top, textvariable=self.var_ext,
+                               values=EXTENSIONS, width=8)
+        ext_box.pack(side='left')
+        tk.Checkbutton(top, text='含子目录',
+                       variable=self.var_recursive).pack(side='left',
+                                                         padx=(8, 0))
         tk.Button(top, text='清空列表', command=self.clear_files,
-                  width=10).pack(side='left', padx=(6, 0))
+                  width=10).pack(side='left', padx=(14, 0))
 
         list_frame = tk.Frame(root)
         list_frame.pack(fill='x', padx=8)
@@ -149,18 +161,39 @@ class App:
         self.output.delete('1.0', 'end')
         self.output.configure(state='disabled')
 
-    def add_files(self):
-        names = filedialog.askopenfilenames(
-            title='选择 TeX 文件',
-            filetypes=[('TeX 文件', '*.tex'), ('所有文件', '*.*')])
+    def _add_paths(self, paths):
         existing = set(self.file_list.get(0, tk.END))
         added = 0
-        for name in names:
+        for name in paths:
             if name not in existing:
                 self.file_list.insert(tk.END, name)
                 added += 1
         self.set_status('已选择 {} 个文件 (新增 {} 个)'.format(
             self.file_list.size(), added))
+
+    def add_files(self):
+        names = filedialog.askopenfilenames(
+            title='选择 TeX 文件',
+            filetypes=[('TeX 文件', '*.tex'), ('所有文件', '*.*')])
+        self._add_paths(names)
+
+    def scan_dir(self):
+        initial = None
+        items = self.file_list.get(0, tk.END)
+        if items:
+            initial = str(Path(items[0]).parent)
+        directory = filedialog.askdirectory(
+            title='选择要扫描的目录', initialdir=initial)
+        if not directory:
+            return
+        try:
+            matches = scan_directory(Path(directory),
+                                     self.var_ext.get().strip() or '.tex',
+                                     self.var_recursive.get())
+        except Exception as exc:
+            self.show_error(traceback.format_exc())
+            return
+        self._add_paths([str(p) for p in matches])
 
     def clear_files(self):
         self.file_list.delete(0, tk.END)

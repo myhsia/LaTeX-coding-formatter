@@ -36,6 +36,8 @@ Usage
                           --output-encoding utf-8 file.tex choose encodings
                           (input default: utf-8; output default: same
                           as the input encoding)
+    python3 format_tex.py --extension .ctx .     scan the directory for
+                          *.ctx files (--recursive to include subdirs)
 """
 
 import argparse
@@ -247,13 +249,47 @@ def _use_utf8_stdio():
             pass
 
 
+def scan_directory(directory, ext, recursive=False):
+    """Return files under ``directory`` whose suffix matches ``ext``
+    (case-insensitive), sorted. ``ext`` may be given with or without
+    the leading dot; ``recursive`` includes subdirectories."""
+    ext = ext.strip()
+    if not ext:
+        ext = '.tex'
+    if not ext.startswith('.'):
+        ext = '.' + ext
+    entries = directory.rglob('*') if recursive else directory.iterdir()
+    matches = [p for p in entries
+               if p.is_file() and p.suffix.lower() == ext.lower()]
+    return sorted(matches)
+
+
+def expand_targets(paths, ext, recursive=False):
+    """Expand directories among ``paths`` into scanned files, keeping
+    plain files as-is; deduplicates while preserving order."""
+    targets = []
+    seen = set()
+    for path in paths:
+        if path.is_dir():
+            candidates = scan_directory(path, ext, recursive)
+        else:
+            candidates = [path]
+        for cand in candidates:
+            key = str(cand)
+            if key not in seen:
+                seen.add(key)
+                targets.append(cand)
+    return targets
+
+
 def main(argv=None):
     _use_utf8_stdio()
     parser = argparse.ArgumentParser(
         description='Insert CJK/Latin spacing in TeX files '
                     '(run with --help to see the full rule set).')
     parser.add_argument('files', nargs='+', type=Path,
-                        help='TeX file(s) to format')
+                        help='TeX file(s) to format; directories are '
+                             'scanned for files matching --extension')
     parser.add_argument('--check', action='store_true',
                         help='report needed changes without writing files')
     parser.add_argument('--no-punct', action='store_true',
@@ -269,6 +305,12 @@ def main(argv=None):
     parser.add_argument('--output-encoding', metavar='NAME', default=None,
                         help='encoding for the written file(s) '
                              '(default: same as --input-encoding)')
+    parser.add_argument('--extension', metavar='EXT', default='.tex',
+                        help='file extension used when scanning directories '
+                             '(default: .tex)')
+    parser.add_argument('--recursive', action='store_true',
+                        help='scan directories recursively (includes '
+                             'subdirectories)')
     args = parser.parse_args(argv)
     opts = FormatOptions(
         punct=not args.no_punct,
@@ -279,8 +321,13 @@ def main(argv=None):
         write_encoding=args.output_encoding,
     )
 
+    targets = expand_targets(args.files, args.extension, args.recursive)
+    if not targets:
+        print('no files found (check --extension / --recursive)')
+        return 1
+
     code = 0
-    for path in args.files:
+    for path in targets:
         if not path.is_file():
             print('{}: ERROR: no such file'.format(path))
             code = 1

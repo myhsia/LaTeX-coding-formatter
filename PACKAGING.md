@@ -63,8 +63,11 @@ PyInstaller 不支持跨平台编译, Windows/Linux 版本通过 CI 在对应系
 
 ## 使用方法
 
-GUI: 点击 "选择文件…" 添加 TeX 文件, 按需勾选选项,
-"预览差异" 查看将做的修改, "应用格式化" 写回文件 (默认生成 `.bak` 备份)。
+GUI: 点击 "选择文件…" 添加 TeX 文件, 或点击 "扫描目录…" 扫描某个目录
+(默认为列表中第一个文件所在目录) 下匹配 "扩展名" 输入框 (默认 .tex,
+可勾选 "含子目录" 递归扫描) 的所有文件并加入列表;
+按需勾选选项, "预览差异" 查看将做的修改, "应用格式化" 写回文件
+(默认生成 `.bak` 备份)。
 "文件编码" 栏可选择输入/输出文件编码: 输入默认 utf-8, 输出默认 "同输入"
 (即与输入编码一致), 内置 gb18030、gbk、gb2312、big5、utf-16、latin-1
 等预设, 也可输入任意编码名。
@@ -77,6 +80,8 @@ format-tex --check file.tex        # 只报告, 不写入
 format-tex --no-punct --no-commands --loose-ranges --no-backup file.tex
 format-tex --input-encoding gb2312 file.ctx        # 输出默认同输入编码
 format-tex --input-encoding gb2312 --output-encoding utf-8 file.ctx
+format-tex --extension .ctx .      # 扫描目录下所有 *.ctx 文件
+format-tex --extension .tex --recursive .   # 递归扫描 (含子目录)
 ```
 
 规则详见 `format_tex.py` 模块文档字符串。
