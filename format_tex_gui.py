@@ -26,7 +26,9 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
                                QComboBox, QFileDialog, QFrame, QHBoxLayout,
                                QInputDialog, QLabel, QListWidget,
                                QMainWindow, QMessageBox, QPlainTextEdit,
-                               QPushButton, QSplitter, QVBoxLayout, QWidget)
+                               QPushButton, QSplitter, QStyle,
+                               QStyleOptionComboBox, QVBoxLayout,
+                               QWidget)
 
 from format_tex import FormatOptions, format_file, scan_directory
 from native_menu import (CUSTOM_SENTINEL, build_menu, menu_entries,
@@ -225,6 +227,20 @@ class NativeMenuCombo(QComboBox):
             return
         super().showPopup()
 
+    def fit_to_menu(self):
+        """Grow the button so the popup - which AppKit never renders
+        narrower than the button - has exactly the button's width, i.e.
+        the highlighted row and the button coincide."""
+        if sys.platform != 'darwin':
+            return
+        items = [self.itemText(i) for i in range(self.count())]
+        menu, _target, _sel = build_menu(items, self.currentText(),
+                                         lambda _v: None, self.CUSTOM_LABEL,
+                                         min_width=self.width())
+        needed = int(round(menu.size().width))
+        if needed > self.width():
+            self.setFixedWidth(needed)
+
     def _choose(self, value):
         if value == CUSTOM_SENTINEL:
             # runs inside NSMenu tracking - defer the Qt dialog until the
@@ -294,11 +310,7 @@ class MainWindow(QMainWindow):
         ext_row.addWidget(QLabel('扩展名'))
         ext_row.addStretch(1)
         self.ext_edit = NativeMenuCombo(EXTENSIONS, '.tex')
-        # just wide enough for four characters (".tex") plus the
-        # popup-button arrow chrome (the macOS style's own minimum is
-        # much wider, so set an explicit width)
-        self.ext_edit.setFixedWidth(
-            QFontMetrics(self.ext_edit.font()).horizontalAdvance('.tex') + 28)
+        self.ext_edit.fit_to_menu()
         ext_row.addWidget(self.ext_edit)
         gv.addLayout(ext_row)
 
@@ -386,6 +398,7 @@ class MainWindow(QMainWindow):
         enc = QHBoxLayout()
         enc.addWidget(QLabel('输出编码'))
         self.enc_out = NativeMenuCombo(ENCODINGS, '同输入')
+        self.enc_out.fit_to_menu()
         enc.addWidget(self.enc_out)
         enc.addWidget(QLabel('(输入编码自动检测; 输出默认同输入编码, '
                              '也可输入任意编码名)'))
@@ -589,38 +602,53 @@ class MainWindow(QMainWindow):
                          '{}'.format(group_ok))
             ok = ok and group_ok
 
-            # the extension button is narrow and right-aligned
+            # the extension button is auto-sized to its menu (so the
+            # popup highlight coincides with it), right-aligned, and
+            # leaves the ".tex" label + arrow room
             ext_w = self.ext_edit.width()
             row = self.ext_edit.parentWidget().layout()
-            row_right = (self.ext_edit.geometry().right()
-                         - row.contentsMargins().right())
-            narrow_ok = ext_w < 60 and abs(
+            right_aligned = abs(
                 self.ext_edit.geometry().right()
                 - (self.ext_edit.parentWidget().width()
                    - row.contentsMargins().right())) < 2
-            lines.append('extension popup narrow ({:.0f} pt) and right-'
-                         'aligned: {}'.format(ext_w, narrow_ok))
-            ok = ok and narrow_ok
+            opt = QStyleOptionComboBox()
+            self.ext_edit.initStyleOption(opt)
+            arrow = self.ext_edit.style().subControlRect(
+                QStyle.ComplexControl.CC_ComboBox, opt,
+                QStyle.SubControl.SC_ComboBoxArrow, self.ext_edit)
+            text_w = QFontMetrics(self.ext_edit.font()).horizontalAdvance(
+                '.tex')
+            slack = ext_w - arrow.width() - text_w
+            ext_ok = right_aligned and slack >= 6
+            lines.append('extension button auto-sized ({:.0f} pt, arrow '
+                         '{:.0f}, slack {:.0f}) and right-aligned: '
+                         '{}'.format(ext_w, arrow.width(), slack, ext_ok))
+            ok = ok and ext_ok
 
-            # the native NSSwitch is overlaid on its slot
+            # the native NSSwitch is overlaid on its slot; verify in
+            # SCREEN coordinates so the check is independent of the
+            # conversion used to place it
             switch = native_switch_view()
             slot = self.switch_slot
             sw_ok = False
             sw_info = 'switch missing'
             if switch is not None:
-                top_left = slot.mapTo(self, QPoint(0, 0))
-                sf = switch.frame()
-                iv = objc.objc_object(c_void_p=int(self.winId()))
-                sy = sf.origin.y if iv.isFlipped() else (
-                    iv.bounds().size.height - sf.origin.y - sf.size.height)
-                sw_info = '{:.0f}x{:.0f} at ({:.0f},{:.0f}) slot ' \
-                    '({:.0f},{:.0f})'.format(
-                        sf.size.width, sf.size.height, sf.origin.x, sy,
-                        top_left.x(), top_left.y())
-                sw_ok = (abs(sf.size.width - slot.width()) < 2
-                         and abs(sf.size.height - slot.height()) < 2
-                         and abs(sf.origin.x - top_left.x()) < 3
-                         and abs(sy - top_left.y()) < 3)
+                slot_tl = slot.mapTo(self, QPoint(0, 0))
+                rect = nswin.convertRectToScreen_(switch.frame())
+                wf = nswin.frame()
+                # both offsets are window-relative, so the comparison is
+                # independent of the two screen coordinate conventions
+                sw_x = rect.origin.x - wf.origin.x
+                sw_y = ((wf.origin.y + wf.size.height)
+                        - (rect.origin.y + rect.size.height))
+                dx = abs(sw_x - slot_tl.x())
+                dy = abs(sw_y - slot_tl.y())
+                size_ok = (abs(rect.size.width - slot.width()) < 2
+                           and abs(rect.size.height - slot.height()) < 2)
+                sw_ok = size_ok and dx < 4 and dy < 4
+                sw_info = 'offset dx {:.0f} dy {:.0f}, {}x{} vs slot {}x{}' \
+                    .format(dx, dy, rect.size.width, rect.size.height,
+                            slot.width(), slot.height())
                 # its action must drive the recursive flag
                 before = self.recursive_enabled()
                 switch.setState_(0 if switch.state() == 1 else 1)
@@ -775,11 +803,9 @@ class MainWindow(QMainWindow):
             enc_menu = popup_for(self.enc_out)
             ext_menu = popup_for(self.ext_edit)
             width_ok = (abs(enc_menu.size().width - self.enc_out.width()) < 1
-                        and abs(ext_menu.minimumWidth()
-                                - self.ext_edit.width()) < 1
-                        and ext_menu.size().width
-                        >= self.ext_edit.width() - 1)
-            lines.append('popup widths (enc == button, narrow ext grows): '
+                        and abs(ext_menu.size().width
+                                - self.ext_edit.width()) < 1)
+            lines.append('popup width == button width for both dropdowns: '
                          '{}'.format(width_ok))
             ok = ok and width_ok
 

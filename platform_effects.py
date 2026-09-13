@@ -159,13 +159,17 @@ def place_native_switch(window, slot):
         from PySide6.QtCore import QPoint
 
         qt_view = objc.objc_object(c_void_p=int(window.winId()))
+        theme = qt_view.superview()
         top_left = slot.mapTo(window, QPoint(0, 0))
+        # The Qt view is flipped (top-left origin), the theme frame is
+        # not - let AppKit do the conversion so both are handled.
+        rect = ((float(top_left.x()), float(top_left.y())),
+                (float(slot.width()), float(slot.height())))
+        target = qt_view.convertRect_toView_(rect, theme)
         sw_w = _SWITCH.frame().size.width
         sw_h = _SWITCH.frame().size.height
-        x = float(top_left.x()) + (slot.width() - sw_w) / 2.0
-        y = float(top_left.y()) + (slot.height() - sw_h) / 2.0
-        if not qt_view.isFlipped():
-            y = qt_view.bounds().size.height - y - sw_h
+        x = target.origin.x + (target.size.width - sw_w) / 2.0
+        y = target.origin.y + (target.size.height - sw_h) / 2.0
         _SWITCH.setFrame_(((x, y), (sw_w, sw_h)))
         _SWITCH.setHidden_(False)
     except Exception as exc:
