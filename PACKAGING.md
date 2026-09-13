@@ -93,12 +93,11 @@ format-tex --extension .tex --recursive .   # 递归扫描 (含子目录)
 (macOS 另需 `pyobjc-framework-Cocoa` 用于 Liquid Glass 窗口效果);
 打包的二进制文件已内置全部依赖。
 
-GUI 基于 Qt (PySide6), macOS 上使用系统原生工具栏 (NSToolbar,
-默认 expanded 样式): 标题栏为系统模糊材质 (约 48-52 pt 高),
-红黄绿按钮居中, 标题栏与内容区之间有系统分隔线, 内容区为不透明窗口底色。
-可用环境变量 FORMAT_TEX_TOOLBAR_STYLE 覆盖栏高
-(automatic|expanded|preference|unified|unifiedCompact,
-在 macOS 27 上实测分别为 66/48/88/66/40 pt)。
+GUI 基于 Qt (PySide6)。macOS 上自绘 52 pt 标题栏色带
+(NSVisualEffectView, sidebar 模糊材质), 原生红黄绿按钮与窗口标题
+垂直居中于色带内 (AppKit 布局会重置, 已在窗口缩放/激活/全屏后自动
+重新校正), 色带与内容区之间为 1 pt 分隔线, 内容区为不透明窗口底色;
+全屏时自动隐藏色带。
 Windows 11 使用 Mica (旧版回退到 Acrylic/纯色),
 Linux 使用系统 Qt 主题并跟随深浅色模式。
 

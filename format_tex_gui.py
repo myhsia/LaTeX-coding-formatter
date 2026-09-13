@@ -19,19 +19,19 @@ import sys
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPointF, QUrl, Qt
+from PySide6.QtCore import QEvent, QPointF, QTimer, QUrl, Qt
 from PySide6.QtGui import QColor, QDropEvent, QFont, QFontDatabase, \
     QPalette, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
-                               QComboBox, QFileDialog, QHBoxLayout, QLabel,
-                               QListWidget, QMainWindow, QMessageBox,
+                               QComboBox, QFileDialog, QFrame, QHBoxLayout,
+                               QLabel, QListWidget, QMainWindow, QMessageBox,
                                QPlainTextEdit, QPushButton, QVBoxLayout,
                                QWidget)
 
 from format_tex import FormatOptions, format_file, scan_directory
-from platform_effects import (apply_effects, last_toolbar_style, notes,
-                              prepare_qt, requested_toolbar_style_name,
-                              titlebar_height)
+from platform_effects import (apply_effects, band_height,
+                              last_material_view, notes, prepare_qt,
+                              reposition_materials)
 
 ENCODINGS = ['同输入', 'utf-8', 'gb18030', 'gbk', 'gb2312', 'big5',
              'utf-16', 'latin-1']
@@ -207,16 +207,29 @@ class MainWindow(QMainWindow):
 
         central = QWidget()
         self.setCentralWidget(central)
-        # Scoped selector: only this widget is painted (children keep
-        # their own fills). The title bar is a native toolbar above, so
-        # the content area is an opaque window-coloured panel.
-        central.setObjectName('central')
+        # The top band_height() points stay transparent so the native
+        # blur band (platform_effects) shows through; everything below
+        # is an opaque window-coloured panel with a hairline separator.
         window_color = self.palette().color(QPalette.ColorRole.Window)
-        central.setStyleSheet('#central {{ background: {}; }}'.format(
+        mid_color = self.palette().color(QPalette.ColorRole.Mid)
+        outer = QVBoxLayout(central)
+        outer.setContentsMargins(0, int(band_height()), 0, 0)
+        outer.setSpacing(0)
+        hairline = QFrame()
+        hairline.setObjectName('hairline')
+        hairline.setFixedHeight(1)
+        hairline.setStyleSheet('#hairline {{ background: {}; }}'.format(
+            mid_color.name()))
+        outer.addWidget(hairline)
+        panel = QWidget()
+        panel.setObjectName('panel')
+        panel.setStyleSheet('#panel {{ background: {}; }}'.format(
             window_color.name()))
-        layout = QVBoxLayout(central)
+        outer.addWidget(panel, 1)
+        layout = QVBoxLayout(panel)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
+        self.content_panel = panel
 
         top = QHBoxLayout()
         top.addWidget(QLabel('扩展名'))
@@ -311,6 +324,16 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
         self.apply_window_effects()
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        reposition_materials(self)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.ActivationChange,
+                            QEvent.Type.WindowStateChange):
+            reposition_materials(self)
+
     def event(self, ev):
         if ev.type() == QEvent.Type.WinIdChange and self._effects_applied:
             self.apply_window_effects()
@@ -325,12 +348,18 @@ class MainWindow(QMainWindow):
             self.show_error(msg + '\n')
         self.statusBar().showMessage(
             '就绪 (窗口效果: {})'.format(self.effect_note))
+        # AppKit re-lays the titlebar out asynchronously right after the
+        # window is ordered front, undoing our centring - re-apply soon
+        # after (0 ms) and once more shortly after (150 ms).
+        QTimer.singleShot(0, lambda: reposition_materials(self))
+        QTimer.singleShot(150, lambda: reposition_materials(self))
 
     def self_test(self):
-        """Assert the native window is visible, carries the unified
-        toolbar (tall blurred bar), and that widgets paint their own
-        backgrounds; writes format_tex_gui_selftest.txt and returns
-        True/False (for the --self-test exit code)."""
+        """Assert the native window is visible, carries the 52 pt
+        sidebar-blur band with the native titlebar chrome centred in it,
+        and that widgets paint their own backgrounds; writes
+        format_tex_gui_selftest.txt and returns True/False (for the
+        --self-test exit code)."""
         import objc
         import AppKit
         lines = []
@@ -343,26 +372,45 @@ class MainWindow(QMainWindow):
             ok = ok and visible
             theme = qt_view.superview()
 
-            # native unified toolbar provides the tall blurred bar
-            tb = nswin.toolbar()
-            toolbar_ok = (tb is not None
-                          and nswin.toolbarStyle() == last_toolbar_style())
-            lines.append('native toolbar (style {}): {}'.format(
-                requested_toolbar_style_name(), toolbar_ok))
-            ok = ok and toolbar_ok
-            bar_height = titlebar_height(nswin)
-            # "expanded": ~44 pt with legacy metrics (source runs) and
-            # ~48 pt under the SDK-26 new design - never the 66 pt of the
-            # full unified style nor the 88 pt of "preference".
-            tall_ok = 34 <= bar_height <= 60
-            lines.append('bar height sane 34-60 pt ({:.0f}): {}'.format(
-                bar_height, tall_ok))
-            ok = ok and tall_ok
-            glass_present = any('GlassEffectView' in type(s).__name__
-                                for s in theme.subviews())
-            lines.append('no NSGlassEffectView band: {}'.format(
-                not glass_present))
-            ok = ok and not glass_present
+            # 52 pt sidebar-blur band behind the top strip
+            band = last_material_view()
+            band_ok = (band is not None
+                       and 'VisualEffectView' in type(band).__name__
+                       and band.material()
+                       == AppKit.NSVisualEffectMaterialSidebar
+                       and abs(band.frame().size.height - band_height()) < 1
+                       and abs((band.frame().origin.y
+                                + band.frame().size.height)
+                               - theme.bounds().size.height) < 2)
+            lines.append('52 pt sidebar-blur band, top-flush: {}'.format(
+                band_ok))
+            ok = ok and band_ok
+            lines.append('no native toolbar: {}'.format(
+                nswin.toolbar() is None))
+            ok = ok and nswin.toolbar() is None
+
+            def chrome_offset():
+                """Distance of the traffic-light centre from the window
+                top, in screen coordinates."""
+                close = nswin.standardWindowButton_(
+                    AppKit.NSWindowCloseButton)
+                rect = close.convertRect_toView_(close.bounds(), None)
+                rect = nswin.convertRectToScreen_(rect)
+                frame = nswin.frame()
+                return ((frame.origin.y + frame.size.height)
+                        - (rect.origin.y + rect.size.height / 2))
+
+            # the app re-applies the centring after AppKit's post-show
+            # layout (deferred timers); mirror that here
+            QApplication.processEvents()
+            reposition_materials(self)
+            centred = abs(chrome_offset() - band_height() / 2) < 2
+            lines.append('traffic lights centred in band ({:.0f} vs {:.0f}): '
+                         '{}'.format(chrome_offset(), band_height() / 2,
+                                     centred))
+            ok = ok and centred
+            lines.append('title visible: {}'.format(
+                nswin.titleVisibility() == AppKit.NSWindowTitleVisible))
             lines.append('contentView is Qt view: {}'.format(
                 nswin.contentView() is qt_view))
             lines.append('effect: {}'.format(self.effect_note))
@@ -390,22 +438,29 @@ class MainWindow(QMainWindow):
                 placeholder_visible))
             ok = ok and placeholder_visible
 
-            # content area below the title bar must be opaque
-            content_opaque, content_transparent = alpha_stats(
-                self.centralWidget().grab().toImage())
-            opaque_ok = content_opaque > 0 and content_transparent == 0
-            lines.append('content area opaque (glass not across whole '
-                         'window): {}'.format(opaque_ok))
+            # the opaque content panel sits below the transparent strip
+            panel_opaque, panel_transparent = alpha_stats(
+                self.content_panel.grab().toImage())
+            opaque_ok = panel_opaque > 0 and panel_transparent == 0
+            lines.append('content panel opaque below the band: {}'.format(
+                opaque_ok))
             ok = ok and opaque_ok
 
-            try:
-                import AppKit
-                sep = nswin.titlebarSeparatorStyle()
-                sep_ok = sep == AppKit.NSTitlebarSeparatorStyleLine
-            except Exception:
-                sep_ok = False
-            lines.append('titlebar separator = line: {}'.format(sep_ok))
-            ok = ok and sep_ok
+            # our own 1 pt hairline separates band and content
+            lines.append('separator hairline present: {}'.format(
+                self.centralWidget().findChild(
+                    QFrame, 'hairline') is not None))
+            ok = ok and self.centralWidget().findChild(
+                QFrame, 'hairline') is not None
+
+            # AppKit resets the chrome on resize - re-application must
+            # restore the centring
+            self.resize(self.width() + 40, self.height() + 30)
+            QApplication.processEvents()
+            recentred = abs(chrome_offset() - band_height() / 2) < 2
+            lines.append('lights still centred after resize: {}'.format(
+                recentred))
+            ok = ok and recentred
 
             # drag & drop: synthesize a drop of a folder (2 files) and a
             # loose file, then assert the list gained them

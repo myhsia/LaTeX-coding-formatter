@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 r"""Native window chrome per OS, for the Qt GUI.
 
-macOS  Native unified NSToolbar (tall bar, system blur material,
-       centred traffic lights, separator) - no custom material views
+macOS  A custom 52 pt title band drawn with an NSVisualEffectView
+       (sidebar blur); the native titlebar chrome (traffic lights and
+       window title) is shifted down so it is vertically centred in the
+       band, and the Qt content is expected to leave a matching
+       transparent strip at the top (see band_height()).
 Windows 11  DWM Mica (with legacy-attribute and solid fallbacks)
 Linux  system Qt platform theme (no override)
 
@@ -12,20 +15,21 @@ view is the window's contentView. Never reparent or re-wrap Qt's view.
 
 Usage
 -----
-    from platform_effects import prepare_qt, apply_effects, notes
-    prepare_qt(window)                    # before show(): Qt attributes +
-                                          # native toolbar (sets geometry)
-    applied = apply_effects(window, dark=...)   # after show()
+    from platform_effects import (band_height, prepare_qt, apply_effects,
+                                  reposition_materials, notes)
+    prepare_qt(window)                  # before show(): Qt attributes
+    apply_effects(window, dark=...)     # after show(): band + chrome
+    reposition_materials(window)        # on resize/activate/full-screen
     notes()  -> list of fallback/failure messages for logging
 """
 
-import os
 import sys
 
 _NOTES = []
-_LAST_TOOLBAR_STYLE = None
 
-_TOOLBAR_STYLES = ()   # filled lazily from AppKit
+BAND_HEIGHT = 52.0
+
+_BAND_VIEW = None
 
 
 def _note(msg):
@@ -36,35 +40,28 @@ def notes():
     return list(_NOTES)
 
 
-def last_toolbar_style():
-    """The NSToolbar style value actually applied (for tests)."""
-    return _LAST_TOOLBAR_STYLE
+def band_height():
+    """Height of the top band the GUI must leave transparent (0 when the
+    platform does not use one)."""
+    return BAND_HEIGHT if sys.platform == 'darwin' else 0.0
 
 
-def requested_toolbar_style_name():
-    return os.environ.get('FORMAT_TEX_TOOLBAR_STYLE',
-                          'expanded').strip().lower()
+def last_material_view():
+    """The band view inserted on macOS (for tests), or None."""
+    return _BAND_VIEW
 
 
 def prepare_qt(window):
-    """Set things that must precede the native window being shown
-    (safe to call from __init__): Qt translucency and, on macOS, the
-    unified toolbar - installing it before show() lets Qt compute its
-    content geometry below the taller title bar."""
+    """Set Qt attributes that must precede the native window being
+    shown (safe to call from __init__)."""
     from PySide6.QtCore import Qt
     window.setAttribute(Qt.WA_TranslucentBackground, True)
-    if sys.platform == 'darwin':
-        try:
-            _install_toolbar(window)
-        except Exception as exc:
-            _note('toolbar install failed: {}: {}'.format(
-                type(exc).__name__, exc))
 
 
 def apply_effects(window, dark=False):
-    """Apply the best native window chrome for the current OS. Returns
-    a short description (for logging); failures degrade to the system
-    theme instead of raising."""
+    """Apply the native window chrome for the current OS. Returns a
+    short description (for logging); failures degrade to the platform
+    default instead of raising."""
     try:
         if sys.platform == 'darwin':
             return _macos(window, dark)
@@ -76,69 +73,104 @@ def apply_effects(window, dark=False):
         return 'system theme (fallback)'
 
 
-def _install_toolbar(window):
-    """Give the window a native unified toolbar: a system-drawn bar with
-    the toolbar blur material, centred traffic lights and the automatic
-    separator. Idempotent.
-
-    The style defaults to "expanded" (~48-52 pt, the classic
-    Finder/Notes-like bar height); it can be overridden for diagnostics
-    with the FORMAT_TEX_TOOLBAR_STYLE environment variable
-    (automatic|expanded|preference|unified|unifiedCompact - measured on
-    macOS 27: 66/48/88/66/40 pt)."""
-    global _LAST_TOOLBAR_STYLE
-    import objc
-    import AppKit
-
-    styles = {
-        'automatic': AppKit.NSWindowToolbarStyleAutomatic,
-        'expanded': AppKit.NSWindowToolbarStyleExpanded,
-        'preference': AppKit.NSWindowToolbarStylePreference,
-        'unified': AppKit.NSWindowToolbarStyleUnified,
-        'unifiedcompact': AppKit.NSWindowToolbarStyleUnifiedCompact,
-    }
-    style = styles.get(requested_toolbar_style_name(),
-                       AppKit.NSWindowToolbarStyleExpanded)
-
-    qt_view = objc.objc_object(c_void_p=int(window.winId()))
-    nswin = qt_view.window()
-    tb = nswin.toolbar()
-    if tb is None:
-        tb = AppKit.NSToolbar.alloc().initWithIdentifier_(
-            'latex-coding-style-formatter')
-        try:
-            tb.setAllowsUserCustomization_(False)
-            tb.setAutosavesConfiguration_(False)
-        except Exception as exc:
-            _note('toolbar options failed: {}'.format(exc))
-        nswin.setToolbar_(tb)
-    nswin.setToolbarStyle_(style)
-    _LAST_TOOLBAR_STYLE = style
+def reposition_materials(window):
+    """Re-fit the band and re-centre the native titlebar chrome. AppKit
+    resets both on resize/activation, so call this from the window's
+    resize/change handlers."""
+    if sys.platform != 'darwin' or _BAND_VIEW is None:
+        return
     try:
-        nswin.setShowsToolbarButton_(False)
+        import objc
+        qt_view = objc.objc_object(c_void_p=int(window.winId()))
+        nswin = qt_view.window()
+        _place_band(nswin, qt_view.superview())
+        _centre_titlebar(nswin)
     except Exception as exc:
-        _note('toolbar button hide failed: {}'.format(exc))
-    try:
-        nswin.setTitlebarSeparatorStyle_(
-            AppKit.NSTitlebarSeparatorStyleLine)
-    except Exception as exc:
-        _note('titlebar separator unavailable: {}'.format(exc))
+        _note('reposition failed: {}: {}'.format(type(exc).__name__, exc))
 
 
 def _macos(window, dark):
-    _install_toolbar(window)
-    return 'unified toolbar (system blur)'
+    import objc
+    import AppKit
 
+    global _BAND_VIEW
 
-def titlebar_height(nswin):
-    """Height of the title bar + toolbar region in points (0 when
-    absent); used by tests to confirm the bar is toolbar-tall."""
+    qt_view = objc.objc_object(c_void_p=int(window.winId()))
+    nswin = qt_view.window()
+    theme = qt_view.superview()
+
+    # We draw the band ourselves - drop any native toolbar.
     try:
-        frame = nswin.frame()
-        content = nswin.contentRectForFrameRect_(frame)
-        return max(0.0, frame.size.height - content.size.height)
+        if nswin.toolbar() is not None:
+            nswin.setToolbar_(None)
+    except Exception as exc:
+        _note('toolbar removal failed: {}'.format(exc))
+
+    mask = nswin.styleMask()
+    if not (mask & AppKit.NSWindowStyleMaskFullSizeContentView):
+        nswin.setStyleMask_(mask | AppKit.NSWindowStyleMaskFullSizeContentView)
+    nswin.setTitlebarAppearsTransparent_(True)
+    nswin.setTitleVisibility_(AppKit.NSWindowTitleVisible)
+    try:
+        nswin.setTitlebarSeparatorStyle_(AppKit.NSTitlebarSeparatorStyleNone)
     except Exception:
-        return 0.0
+        pass
+
+    if _BAND_VIEW is None:
+        band = AppKit.NSVisualEffectView.alloc().init()
+        band.setMaterial_(AppKit.NSVisualEffectMaterialSidebar)
+        band.setBlendingMode_(AppKit.NSVisualEffectBlendingModeBehindWindow)
+        band.setState_(AppKit.NSVisualEffectStateFollowsWindowActiveState)
+        _BAND_VIEW = band
+    try:
+        _BAND_VIEW.removeFromSuperview()
+    except Exception:
+        pass
+    theme.addSubview_positioned_relativeTo_(_BAND_VIEW, AppKit.NSWindowBelow,
+                                            qt_view)
+    _place_band(nswin, theme)
+    _centre_titlebar(nswin)
+    return '52 pt sidebar-blur band'
+
+
+def _place_band(nswin, theme):
+    import AppKit
+    if _BAND_VIEW is None:
+        return
+    if nswin.styleMask() & AppKit.NSWindowStyleMaskFullScreen:
+        _BAND_VIEW.setHidden_(True)      # no title bar in full screen
+        return
+    bounds = theme.bounds()
+    _BAND_VIEW.setHidden_(False)
+    _BAND_VIEW.setFrame_(((0.0, bounds.size.height - BAND_HEIGHT),
+                          (bounds.size.width, BAND_HEIGHT)))
+
+
+def _centre_titlebar(nswin):
+    """Move the native titlebar container (traffic lights + title) so
+    its centre lands in the middle of the band.
+
+    AppKit resets the container on layout, so instead of storing a
+    baseline we correct from the measured offset - the container moves
+    the chrome 1:1, so one step is exact and re-running is a no-op."""
+    import AppKit
+
+    close = nswin.standardWindowButton_(AppKit.NSWindowCloseButton)
+    if close is None:
+        return
+    box = close.superview()
+    rect = close.convertRect_toView_(close.bounds(), None)
+    rect = nswin.convertRectToScreen_(rect)
+    frame = nswin.frame()
+    current = ((frame.origin.y + frame.size.height)
+               - (rect.origin.y + rect.size.height / 2))
+    delta = current - BAND_HEIGHT / 2.0        # >0: chrome is too low
+    if abs(delta) < 0.5:
+        return
+    bf = box.frame()
+    flipped = bool(box.superview().isFlipped())
+    box.setFrameOrigin_((bf.origin.x,
+                         bf.origin.y + (-delta if flipped else delta)))
 
 
 def _windows(window, dark):
