@@ -19,9 +19,13 @@ Usage
     notes()  -> list of fallback/failure messages for logging
 """
 
+import os
 import sys
 
 _NOTES = []
+_LAST_TOOLBAR_STYLE = None
+
+_TOOLBAR_STYLES = ()   # filled lazily from AppKit
 
 
 def _note(msg):
@@ -30,6 +34,16 @@ def _note(msg):
 
 def notes():
     return list(_NOTES)
+
+
+def last_toolbar_style():
+    """The NSToolbar style value actually applied (for tests)."""
+    return _LAST_TOOLBAR_STYLE
+
+
+def requested_toolbar_style_name():
+    return os.environ.get('FORMAT_TEX_TOOLBAR_STYLE',
+                          'expanded').strip().lower()
 
 
 def prepare_qt(window):
@@ -63,11 +77,28 @@ def apply_effects(window, dark=False):
 
 
 def _install_toolbar(window):
-    """Give the window a native unified toolbar: a tall system-drawn bar
-    with the toolbar blur material, centred traffic lights and the
-    automatic separator. Idempotent."""
+    """Give the window a native unified toolbar: a system-drawn bar with
+    the toolbar blur material, centred traffic lights and the automatic
+    separator. Idempotent.
+
+    The style defaults to "expanded" (~48-52 pt, the classic
+    Finder/Notes-like bar height); it can be overridden for diagnostics
+    with the FORMAT_TEX_TOOLBAR_STYLE environment variable
+    (automatic|expanded|preference|unified|unifiedCompact - measured on
+    macOS 27: 66/48/88/66/40 pt)."""
+    global _LAST_TOOLBAR_STYLE
     import objc
     import AppKit
+
+    styles = {
+        'automatic': AppKit.NSWindowToolbarStyleAutomatic,
+        'expanded': AppKit.NSWindowToolbarStyleExpanded,
+        'preference': AppKit.NSWindowToolbarStylePreference,
+        'unified': AppKit.NSWindowToolbarStyleUnified,
+        'unifiedcompact': AppKit.NSWindowToolbarStyleUnifiedCompact,
+    }
+    style = styles.get(requested_toolbar_style_name(),
+                       AppKit.NSWindowToolbarStyleExpanded)
 
     qt_view = objc.objc_object(c_void_p=int(window.winId()))
     nswin = qt_view.window()
@@ -81,7 +112,8 @@ def _install_toolbar(window):
         except Exception as exc:
             _note('toolbar options failed: {}'.format(exc))
         nswin.setToolbar_(tb)
-    nswin.setToolbarStyle_(AppKit.NSWindowToolbarStyleUnified)
+    nswin.setToolbarStyle_(style)
+    _LAST_TOOLBAR_STYLE = style
     try:
         nswin.setShowsToolbarButton_(False)
     except Exception as exc:

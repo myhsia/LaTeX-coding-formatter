@@ -29,7 +29,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
                                QWidget)
 
 from format_tex import FormatOptions, format_file, scan_directory
-from platform_effects import (apply_effects, notes, prepare_qt,
+from platform_effects import (apply_effects, last_toolbar_style, notes,
+                              prepare_qt, requested_toolbar_style_name,
                               titlebar_height)
 
 ENCODINGS = ['同输入', 'utf-8', 'gb18030', 'gbk', 'gb2312', 'big5',
@@ -345,13 +346,16 @@ class MainWindow(QMainWindow):
             # native unified toolbar provides the tall blurred bar
             tb = nswin.toolbar()
             toolbar_ok = (tb is not None
-                          and nswin.toolbarStyle()
-                          == AppKit.NSWindowToolbarStyleUnified)
-            lines.append('native unified toolbar: {}'.format(toolbar_ok))
+                          and nswin.toolbarStyle() == last_toolbar_style())
+            lines.append('native toolbar (style {}): {}'.format(
+                requested_toolbar_style_name(), toolbar_ok))
             ok = ok and toolbar_ok
             bar_height = titlebar_height(nswin)
-            tall_ok = bar_height > 40
-            lines.append('toolbar-tall bar ({:.0f} pt > 40): {}'.format(
+            # "expanded": ~44 pt with legacy metrics (source runs) and
+            # ~48 pt under the SDK-26 new design - never the 66 pt of the
+            # full unified style nor the 88 pt of "preference".
+            tall_ok = 34 <= bar_height <= 60
+            lines.append('bar height sane 34-60 pt ({:.0f}): {}'.format(
                 bar_height, tall_ok))
             ok = ok and tall_ok
             glass_present = any('GlassEffectView' in type(s).__name__
