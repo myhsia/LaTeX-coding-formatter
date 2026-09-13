@@ -34,6 +34,10 @@ TITLE_GAP = 8.0          # gap between the traffic lights and the title
 _BAND_VIEW = None
 _SIDEBAR_VIEW = None
 _SIDEBAR_WIDTH = 0.0
+_SWITCH = None
+_SWITCH_TARGET = None
+_SWITCH_SLOT = None
+_SWITCH_TARGET_CLASS = None
 
 
 def _note(msg):
@@ -91,6 +95,108 @@ def set_sidebar_width(width):
         _SIDEBAR_WIDTH = 0.0
 
 
+def _switch_target_class():
+    """pyobjc NSObject subclass acting as the switch's action target."""
+    global _SWITCH_TARGET_CLASS
+    if _SWITCH_TARGET_CLASS is None:
+        from AppKit import NSObject
+
+        class _SwitchTarget(NSObject):
+            def switched_(self, sender):
+                self.callback(int(sender.state()) == 1)
+
+        _SWITCH_TARGET_CLASS = _SwitchTarget
+    return _SWITCH_TARGET_CLASS
+
+
+def create_native_switch(window, callback, on=False):
+    """Create/insert a native NSSwitch above the Qt view (so it draws and
+    behaves natively in the sidebar). Returns True on success; callers
+    fall back to a Qt checkbox otherwise."""
+    global _SWITCH, _SWITCH_TARGET
+    if sys.platform != 'darwin':
+        return False
+    try:
+        import objc
+        import AppKit
+
+        if _SWITCH is None:
+            target = _switch_target_class().alloc().init()
+            target.callback = callback
+            switch = AppKit.NSSwitch.alloc().init()
+            switch.setControlSize_(AppKit.NSControlSizeRegular)
+            switch.setTarget_(target)
+            switch.setAction_(b'switched:')
+            switch.sizeToFit()
+            _SWITCH, _SWITCH_TARGET = switch, target
+        _SWITCH.setState_(AppKit.NSControlStateValueOn if on
+                          else AppKit.NSControlStateValueOff)
+
+        qt_view = objc.objc_object(c_void_p=int(window.winId()))
+        theme = qt_view.superview()
+        try:
+            _SWITCH.removeFromSuperview()
+        except Exception:
+            pass
+        theme.addSubview_positioned_relativeTo_(_SWITCH, AppKit.NSWindowAbove,
+                                               qt_view)
+        # once in the window the switch settles on its real size
+        _SWITCH.sizeToFit()
+        return True
+    except Exception as exc:
+        _note('native switch failed: {}: {}'.format(type(exc).__name__, exc))
+        return False
+
+
+def place_native_switch(window, slot):
+    """Centre the native switch over the Qt ``slot`` widget."""
+    global _SWITCH_SLOT
+    if sys.platform != 'darwin' or _SWITCH is None:
+        return
+    _SWITCH_SLOT = slot
+    try:
+        import objc
+        from PySide6.QtCore import QPoint
+
+        qt_view = objc.objc_object(c_void_p=int(window.winId()))
+        top_left = slot.mapTo(window, QPoint(0, 0))
+        sw_w = _SWITCH.frame().size.width
+        sw_h = _SWITCH.frame().size.height
+        x = float(top_left.x()) + (slot.width() - sw_w) / 2.0
+        y = float(top_left.y()) + (slot.height() - sw_h) / 2.0
+        if not qt_view.isFlipped():
+            y = qt_view.bounds().size.height - y - sw_h
+        _SWITCH.setFrame_(((x, y), (sw_w, sw_h)))
+        _SWITCH.setHidden_(False)
+    except Exception as exc:
+        _note('native switch placement failed: {}: {}'.format(
+            type(exc).__name__, exc))
+
+
+def native_switch_state():
+    try:
+        return bool(_SWITCH is not None and _SWITCH.state() == 1)
+    except Exception:
+        return False
+
+
+def set_native_switch_state(on):
+    try:
+        if _SWITCH is not None:
+            _SWITCH.setState_(1 if on else 0)
+    except Exception:
+        pass
+
+
+def has_native_switch():
+    return _SWITCH is not None
+
+
+def native_switch_view():
+    """The NSSwitch instance (for tests), or None."""
+    return _SWITCH
+
+
 def prepare_qt(window):
     """Set Qt attributes that must precede the native window being
     shown (safe to call from __init__)."""
@@ -126,6 +232,8 @@ def reposition_materials(window):
         _place_band(nswin, qt_view.superview())
         _place_sidebar(nswin, qt_view.superview())
         _align_titlebar(nswin)
+        if _SWITCH is not None and _SWITCH_SLOT is not None:
+            place_native_switch(window, _SWITCH_SLOT)
     except Exception as exc:
         _note('reposition failed: {}: {}'.format(type(exc).__name__, exc))
 

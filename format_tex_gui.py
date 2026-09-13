@@ -19,9 +19,9 @@ import sys
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPointF, QTimer, QUrl, Qt
+from PySide6.QtCore import QEvent, QPoint, QPointF, QTimer, QUrl, Qt
 from PySide6.QtGui import QColor, QDropEvent, QFont, QFontDatabase, \
-    QPalette, QTextCharFormat, QTextCursor
+    QFontMetrics, QPalette, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
                                QComboBox, QFileDialog, QFrame, QHBoxLayout,
                                QInputDialog, QLabel, QListWidget,
@@ -32,8 +32,11 @@ from format_tex import FormatOptions, format_file, scan_directory
 from native_menu import (CUSTOM_SENTINEL, build_menu, menu_entries,
                          popup_native_menu)
 from platform_effects import (apply_effects, band_height,
+                              create_native_switch, has_native_switch,
                               last_material_view, last_sidebar_view,
-                              lights_inset, notes, prepare_qt,
+                              lights_inset, native_switch_state,
+                              native_switch_view, notes,
+                              place_native_switch, prepare_qt,
                               reposition_materials, set_sidebar_width,
                               title_gap)
 
@@ -276,13 +279,48 @@ class MainWindow(QMainWindow):
         slayout = QVBoxLayout(sidebar)
         slayout.setContentsMargins(12, 12, 12, 12)
         slayout.setSpacing(8)
+
+        # macOS-Settings-style grouped box: two rows with a hairline
+        group = QFrame()
+        group.setObjectName('group')
+        group.setStyleSheet(
+            '#group { background: rgba(120, 120, 128, 0.12);'
+            ' border-radius: 8px; }')
+        gv = QVBoxLayout(group)
+        gv.setContentsMargins(10, 6, 10, 6)
+        gv.setSpacing(0)
+
         ext_row = QHBoxLayout()
         ext_row.addWidget(QLabel('扩展名'))
+        ext_row.addStretch(1)
         self.ext_edit = NativeMenuCombo(EXTENSIONS, '.tex')
-        ext_row.addWidget(self.ext_edit, 1)
-        slayout.addLayout(ext_row)
-        self.chk_recursive = QCheckBox('含子目录')
-        slayout.addWidget(self.chk_recursive)
+        # just wide enough for four characters (".tex") plus the
+        # popup-button arrow chrome (the macOS style's own minimum is
+        # much wider, so set an explicit width)
+        self.ext_edit.setFixedWidth(
+            QFontMetrics(self.ext_edit.font()).horizontalAdvance('.tex') + 28)
+        ext_row.addWidget(self.ext_edit)
+        gv.addLayout(ext_row)
+
+        rowsep = QFrame()
+        rowsep.setObjectName('rowsep')
+        rowsep.setFixedHeight(1)
+        rowsep.setStyleSheet(
+            '#rowsep { background: rgba(120, 120, 128, 0.28); }')
+        gv.addWidget(rowsep)
+
+        rec_row = QHBoxLayout()
+        rec_row.addWidget(QLabel('含子目录'))
+        rec_row.addStretch(1)
+        self.chk_recursive = QCheckBox()
+        self.chk_recursive.setVisible(False)      # native switch is used
+        rec_row.addWidget(self.chk_recursive)
+        self.switch_slot = QWidget()
+        self.switch_slot.setFixedSize(42, 25)
+        rec_row.addWidget(self.switch_slot)
+        gv.addLayout(rec_row)
+        slayout.addWidget(group)
+
         self.btn_clear = QPushButton('清空列表')
         self.btn_clear.clicked.connect(self.clear_files)
         slayout.addWidget(self.btn_clear)
@@ -433,6 +471,7 @@ class MainWindow(QMainWindow):
     def apply_window_effects(self):
         self.effect_note = apply_effects(self, self.dark)
         self._effects_applied = True
+        self._setup_native_switch()
         new_notes = notes()[self._notes_seen:]
         self._notes_seen = len(notes())
         for msg in new_notes:
@@ -448,6 +487,34 @@ class MainWindow(QMainWindow):
     def _reapply_materials(self):
         self._sync_sidebar_width()
         reposition_materials(self)
+
+    def _setup_native_switch(self):
+        """Use a real NSSwitch for 含子目录; fall back to the Qt
+        checkbox if it cannot be created."""
+        ok = create_native_switch(self, self._on_recursive_switch,
+                                  self.chk_recursive.isChecked())
+        if ok:
+            # reserve exactly the switch's real size in the row
+            view = native_switch_view()
+            if view is not None:
+                frame = view.frame()
+                self.switch_slot.setFixedSize(int(round(frame.size.width)),
+                                              int(round(frame.size.height)))
+            self.switch_slot.setVisible(True)
+            self.chk_recursive.setVisible(False)
+            place_native_switch(self, self.switch_slot)
+        else:
+            self.switch_slot.setVisible(False)
+            self.chk_recursive.setVisible(True)
+
+    def _on_recursive_switch(self, state):
+        self.chk_recursive.setChecked(bool(state))
+
+    def recursive_enabled(self):
+        """含子目录 state, from the native switch when available."""
+        if has_native_switch():
+            return native_switch_state()
+        return self.recursive_enabled()
 
     def self_test(self):
         """Assert the native window is visible, carries the 52 pt
@@ -466,6 +533,10 @@ class MainWindow(QMainWindow):
             lines.append('window visible: {}'.format(visible))
             ok = ok and visible
             theme = qt_view.superview()
+            # settle the layout and materials before geometry checks
+            QApplication.processEvents()
+            reposition_materials(self)
+            QApplication.processEvents()
 
             # 52 pt sidebar-blur band behind the top strip
             band = last_material_view()
@@ -509,6 +580,57 @@ class MainWindow(QMainWindow):
                          '{}): {}'.format(list_right, panel_left,
                                           leftright_ok))
             ok = ok and leftright_ok
+
+            # Settings-style group box with two rows + separator
+            group = self.centralWidget().findChild(QFrame, 'group')
+            rowsep = self.centralWidget().findChild(QFrame, 'rowsep')
+            group_ok = group is not None and rowsep is not None
+            lines.append('grouped settings box with row separator: '
+                         '{}'.format(group_ok))
+            ok = ok and group_ok
+
+            # the extension button is narrow and right-aligned
+            ext_w = self.ext_edit.width()
+            row = self.ext_edit.parentWidget().layout()
+            row_right = (self.ext_edit.geometry().right()
+                         - row.contentsMargins().right())
+            narrow_ok = ext_w < 60 and abs(
+                self.ext_edit.geometry().right()
+                - (self.ext_edit.parentWidget().width()
+                   - row.contentsMargins().right())) < 2
+            lines.append('extension popup narrow ({:.0f} pt) and right-'
+                         'aligned: {}'.format(ext_w, narrow_ok))
+            ok = ok and narrow_ok
+
+            # the native NSSwitch is overlaid on its slot
+            switch = native_switch_view()
+            slot = self.switch_slot
+            sw_ok = False
+            sw_info = 'switch missing'
+            if switch is not None:
+                top_left = slot.mapTo(self, QPoint(0, 0))
+                sf = switch.frame()
+                iv = objc.objc_object(c_void_p=int(self.winId()))
+                sy = sf.origin.y if iv.isFlipped() else (
+                    iv.bounds().size.height - sf.origin.y - sf.size.height)
+                sw_info = '{:.0f}x{:.0f} at ({:.0f},{:.0f}) slot ' \
+                    '({:.0f},{:.0f})'.format(
+                        sf.size.width, sf.size.height, sf.origin.x, sy,
+                        top_left.x(), top_left.y())
+                sw_ok = (abs(sf.size.width - slot.width()) < 2
+                         and abs(sf.size.height - slot.height()) < 2
+                         and abs(sf.origin.x - top_left.x()) < 3
+                         and abs(sy - top_left.y()) < 3)
+                # its action must drive the recursive flag
+                before = self.recursive_enabled()
+                switch.setState_(0 if switch.state() == 1 else 1)
+                switch.target().switched_(switch)
+                sw_ok = sw_ok and self.recursive_enabled() != before
+                switch.setState_(1 if before else 0)
+                switch.target().switched_(switch)
+            lines.append('native NSSwitch overlaid and wired ({}): '
+                         '{}'.format(sw_info, sw_ok))
+            ok = ok and sw_ok
 
             def chrome_offset():
                 """Distance of the traffic-light centre from the window
@@ -640,20 +762,24 @@ class MainWindow(QMainWindow):
                          '{}'.format(combos_ok))
             ok = ok and combos_ok
 
-            # the popup must never be narrower than its button, and (with
-            # the shipped presets) no wider either, so the highlighted row
-            # coincides with the button
-            width_ok = True
-            for combo in (self.ext_edit, self.enc_out):
+            # 输出编码: popup exactly the button width; 扩展名: narrow
+            # button with a popup that grows to fit its items (native)
+            def popup_for(combo):
                 combo_items = [combo.itemText(i)
                                for i in range(combo.count())]
-                menu, _target, _sel = build_menu(
+                menu, _t, _s = build_menu(
                     combo_items, combo.currentText(), lambda _v: None,
                     NativeMenuCombo.CUSTOM_LABEL, min_width=combo.width())
-                width_ok = width_ok and (
-                    abs(menu.minimumWidth() - combo.width()) < 1
-                    and abs(menu.size().width - combo.width()) < 1)
-            lines.append('popup width equals the button width: '
+                return menu
+
+            enc_menu = popup_for(self.enc_out)
+            ext_menu = popup_for(self.ext_edit)
+            width_ok = (abs(enc_menu.size().width - self.enc_out.width()) < 1
+                        and abs(ext_menu.minimumWidth()
+                                - self.ext_edit.width()) < 1
+                        and ext_menu.size().width
+                        >= self.ext_edit.width() - 1)
+            lines.append('popup widths (enc == button, narrow ext grows): '
                          '{}'.format(width_ok))
             ok = ok and width_ok
 
@@ -762,7 +888,7 @@ class MainWindow(QMainWindow):
             matches = scan_directory(Path(directory),
                                      self.ext_edit.currentText().strip()
                                      or '.tex',
-                                     self.chk_recursive.isChecked())
+                                     self.recursive_enabled())
         except Exception:
             self.show_error(traceback.format_exc())
             return
@@ -774,7 +900,7 @@ class MainWindow(QMainWindow):
         settings (extension + recursion checkbox)."""
         try:
             ext = self.ext_edit.currentText().strip() or '.tex'
-            recursive = self.chk_recursive.isChecked()
+            recursive = self.recursive_enabled()
             collected = []
             n_dirs = n_files = 0
             seen = set()
