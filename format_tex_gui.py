@@ -20,8 +20,8 @@ import traceback
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QPointF, QUrl, Qt
-from PySide6.QtGui import QColor, QDropEvent, QFontDatabase, QPalette, \
-    QTextCharFormat, QTextCursor
+from PySide6.QtGui import QColor, QDropEvent, QFont, QFontDatabase, \
+    QPalette, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
                                QComboBox, QFileDialog, QHBoxLayout, QLabel,
                                QListWidget, QMainWindow, QMessageBox,
@@ -62,13 +62,91 @@ class DropListWidget(QListWidget):
 
     Only local-file URLs are accepted; non-local URLs (http:// etc.) are
     ignored. The parent supplies a callback receiving the dropped local
-    paths."""
+    paths. When the list is empty, a centered overlay offers click or
+    drag & drop (the two links open the parent's dialogs)."""
 
-    def __init__(self, on_paths, parent=None):
+    def __init__(self, on_paths, on_choose_files, on_choose_folder,
+                 parent=None):
         super().__init__(parent)
         self._on_paths = on_paths
+        self.on_choose_files = on_choose_files
+        self.on_choose_folder = on_choose_folder
         self.setAcceptDrops(True)
         self.setDragDropMode(QAbstractItemView.DragDropMode.DropOnly)
+
+        self._placeholder = QWidget(self.viewport())
+        playout = QVBoxLayout(self._placeholder)
+        playout.setContentsMargins(12, 12, 12, 12)
+        playout.setSpacing(6)
+
+        self._plus = QLabel('+')
+        plus_font = self._plus.font()
+        plus_font.setPointSize(54)
+        plus_font.setWeight(QFont.Weight.Light)
+        self._plus.setFont(plus_font)
+        self._plus.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        muted = self.palette().color(QPalette.ColorRole.PlaceholderText)
+        self._plus.setStyleSheet('color: {};'.format(muted.name()))
+        playout.addWidget(self._plus)
+
+        self._hint = QLabel('Click or drag and drop files/folders '
+                            'into the box')
+        self._hint.setWordWrap(True)
+        self._hint.setMaximumWidth(380)
+        self._hint.setAlignment(Qt.AlignmentFlag.AlignHCenter
+                                | Qt.AlignmentFlag.AlignVCenter)
+        self._hint.setStyleSheet('color: {};'.format(muted.name()))
+        playout.addWidget(self._hint, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        self._links = QLabel(
+            '<a href="files">选择文件</a>&nbsp;&nbsp;&nbsp;&nbsp;'
+            '<a href="folder">选择目录</a>')
+        self._links.linkActivated.connect(self._dispatch_link)
+        self._links.setTextInteractionFlags(
+            Qt.TextInteractionFlag.LinksAccessibleByMouse)
+        playout.addWidget(self._links, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        # The placeholder covers the viewport, so it must accept drops
+        # and forward them to the list's own handlers.
+        self._placeholder.setAcceptDrops(True)
+        self._placeholder.installEventFilter(self)
+
+        self.model().rowsInserted.connect(self.update_placeholder)
+        self.model().rowsRemoved.connect(self.update_placeholder)
+        self.model().modelReset.connect(self.update_placeholder)
+        self.update_placeholder()
+
+    def eventFilter(self, obj, event):
+        t = event.type()
+        if t == QEvent.Type.DragEnter:
+            self.dragEnterEvent(event)
+            return event.isAccepted()
+        if t == QEvent.Type.DragMove:
+            self.dragMoveEvent(event)
+            return event.isAccepted()
+        if t == QEvent.Type.Drop:
+            self.dropEvent(event)
+            return event.isAccepted()
+        if t == QEvent.Type.DragLeave:
+            self.dragLeaveEvent(event)
+            return True
+        return super().eventFilter(obj, event)
+
+    def _dispatch_link(self, link):
+        if link == 'files':
+            self.on_choose_files()
+        elif link == 'folder':
+            self.on_choose_folder()
+
+    def update_placeholder(self):
+        self._placeholder.setVisible(self.count() == 0)
+
+    def placeholder_widget(self):
+        return self._placeholder
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._placeholder.setGeometry(self.viewport().rect())
 
     def dragEnterEvent(self, event):
         if self._has_local_files(event.mimeData()):
@@ -137,14 +215,6 @@ class MainWindow(QMainWindow):
         layout.setSpacing(8)
 
         top = QHBoxLayout()
-        pick = QPushButton('选择文件…')
-        pick.clicked.connect(self.add_files)
-        scan = QPushButton('扫描目录…')
-        scan.clicked.connect(self.scan_dir)
-        self.btn_clear = QPushButton('清空列表')
-        self.btn_clear.clicked.connect(self.clear_files)
-        top.addWidget(pick)
-        top.addWidget(scan)
         top.addWidget(QLabel('扩展名'))
         self.ext_edit = QComboBox()
         self.ext_edit.setEditable(True)
@@ -153,11 +223,14 @@ class MainWindow(QMainWindow):
         top.addWidget(self.ext_edit)
         self.chk_recursive = QCheckBox('含子目录')
         top.addWidget(self.chk_recursive)
+        self.btn_clear = QPushButton('清空列表')
+        self.btn_clear.clicked.connect(self.clear_files)
         top.addWidget(self.btn_clear)
         top.addStretch(1)
         layout.addLayout(top)
 
-        self.file_list = DropListWidget(self.drop_paths)
+        self.file_list = DropListWidget(self.drop_paths, self.add_files,
+                                        self.scan_dir)
         layout.addWidget(self.file_list)
 
         options = QLabel('选项:')
@@ -294,6 +367,11 @@ class MainWindow(QMainWindow):
             lines.append('file list paints a background: {}'.format(
                 list_opaque > 0))
             ok = ok and list_opaque > 0
+            placeholder = self.file_list.placeholder_widget()
+            placeholder_visible = placeholder.isVisible()
+            lines.append('placeholder shown when empty: {}'.format(
+                placeholder_visible))
+            ok = ok and placeholder_visible
             _, container_transparent = alpha_stats(
                 self.centralWidget().grab().toImage())
             lines.append('container has transparent gaps (glass '
@@ -319,9 +397,12 @@ class MainWindow(QMainWindow):
                                Qt.KeyboardModifier.NoModifier)
             self.file_list.dropEvent(event)
             gained = self.file_list.count() - before
-            lines.append('drop added files: {} (folder scan + loose '
-                         'file)'.format(gained))
-            ok = ok and gained >= 2
+            lines.append('drop added files: {} (folder scan '
+                         '+ loose file)'.format(gained))
+            placeholder_hidden = not placeholder.isVisible()
+            lines.append('placeholder hidden after files: {}'.format(
+                placeholder_hidden))
+            ok = ok and gained >= 2 and placeholder_hidden
             shutil.rmtree(drop_dir, ignore_errors=True)
         except Exception as exc:
             lines.append('self-test exception: {}: {}'.format(
