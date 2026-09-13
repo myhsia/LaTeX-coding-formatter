@@ -103,13 +103,15 @@ class App:
         self.var_commands = tk.BooleanVar(value=True)
         self.var_tight = tk.BooleanVar(value=True)
         self.var_backup = tk.BooleanVar(value=True)
+        self.var_magic = tk.BooleanVar(value=True)
         self.var_check = tk.BooleanVar(value=False)
         for row, cols in enumerate([
             [('半角标点前后加空格', self.var_punct),
              ('CJK 与命令之间加空格', self.var_commands)],
             [('页码范围保持紧凑', self.var_tight),
              ('生成备份文件 (.bak)', self.var_backup)],
-            [('仅检查 (不写入文件)', self.var_check), None],
+            [('添加编码魔法注释', self.var_magic),
+             ('仅检查 (不写入文件)', self.var_check)],
         ]):
             for col, item in enumerate(cols):
                 if item is None:
@@ -123,15 +125,11 @@ class App:
 
         enc_frame = tk.LabelFrame(root, text='文件编码')
         enc_frame.pack(fill='x', padx=8, pady=(0, 6))
-        tk.Label(enc_frame, text='输入编码').pack(side='left', padx=(8, 2))
-        self.enc_in = ttk.Combobox(enc_frame, values=ENCODINGS, width=12)
-        self.enc_in.set('utf-8')
-        self.enc_in.pack(side='left')
-        tk.Label(enc_frame, text='输出编码').pack(side='left', padx=(16, 2))
+        tk.Label(enc_frame, text='输出编码').pack(side='left', padx=(8, 2))
         self.enc_out = ttk.Combobox(enc_frame, values=ENCODINGS, width=12)
         self.enc_out.set('同输入')
         self.enc_out.pack(side='left')
-        tk.Label(enc_frame, text='(输入默认 utf-8; 输出默认同输入编码, '
+        tk.Label(enc_frame, text='(输入编码自动检测; 输出默认同输入编码, '
                                  '也可输入任意编码名)').pack(
             side='left', padx=(10, 8))
 
@@ -271,7 +269,7 @@ class App:
             commands=self.var_commands.get(),
             tight_ranges=self.var_tight.get(),
             backup=self.var_backup.get(),
-            read_encoding=self.enc_in.get().strip(),
+            magic_comment=self.var_magic.get(),
             write_encoding=self.write_encoding(),
         )
 
@@ -283,7 +281,8 @@ class App:
                 entry['error'] = '文件不存在'
             else:
                 try:
-                    source, result, count = format_file(path, opts)
+                    source, result, count, read_enc = format_file(path, opts)
+                    entry['read_enc'] = read_enc
                     entry['result'] = result
                     entry['count'] = count
                     entry['diff'] = list(difflib.unified_diff(
@@ -304,7 +303,10 @@ class App:
         self.clear_output()
         write_errors = 0
         for e in results:
-            self.append('== {} ==\n'.format(e['path']))
+            header = '== {} =='.format(e['path'])
+            if e.get('read_enc'):
+                header += '  [检测编码: {}]'.format(e['read_enc'])
+            self.append(header + '\n')
             if e['error']:
                 self.append('错误: {}\n\n'.format(e['error']))
                 continue
@@ -315,7 +317,7 @@ class App:
                 self.append_tagged(line + '\n', diff_tag(line))
             self.append('\n')
             if will_write:
-                out_enc = opts.effective_write_encoding()
+                out_enc = opts.effective_write_encoding(e.get('read_enc'))
                 try:
                     data = e['result'].encode(out_enc)
                 except (ValueError, LookupError) as exc:

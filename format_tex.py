@@ -34,13 +34,18 @@ Usage
                           --no-backup file.tex             toggle rule sets
     python3 format_tex.py --input-encoding gb2312
                           --output-encoding utf-8 file.tex choose encodings
-                          (input default: utf-8; output default: same
-                          as the input encoding)
+                          (input is auto-detected per file by default;
+                          --input-encoding overrides it; output defaults
+                          to each file's detected encoding)
+    python3 format_tex.py --no-magic-comment file.tex
+                          skip "% !TeX encoding" magic comments
+                          (default: add when missing)
     python3 format_tex.py --extension .ctx .     scan the directory for
                           *.ctx files (--recursive to include subdirs)
 """
 
 import argparse
+import codecs
 import difflib
 import re
 import shutil
@@ -48,6 +53,11 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+try:
+    import chardet
+except ImportError:
+    chardet = None
 
 HAN = '\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff'
 SENT = '.,;:!?'
@@ -60,24 +70,113 @@ MATH_RE = re.compile(r'(?<!\\)\$(?:\\.|[^\\$])*?(?<!\\)\$', re.DOTALL)
 QUOTE_RE = re.compile(r"``.*?''", re.DOTALL)
 DOLLAR_RE = re.compile(r'(?<!\\)\$')
 PLACEHOLDER_RE = re.compile('\x00([SVMT])(\\d+)\x01')
+MAGIC_COMMENT_RE = re.compile(r'^\s*%\s*!\s*tex\s+encoding',
+                              re.IGNORECASE | re.MULTILINE)
+KNOWN_ENCODINGS = ('gbk', 'gb18030', 'utf-8', 'utf-16', 'ascii',
+                   'utf-8-sig', 'big5')
+
+
+def _score_cjk(text):
+    """Fraction of non-ASCII characters landing in common CJK ranges."""
+    good = bad = 0
+    for ch in text:
+        cp = ord(ch)
+        if cp < 0x80:
+            continue
+        if (0x4E00 <= cp <= 0x9FFF or 0x3400 <= cp <= 0x4DBF
+                or 0x3000 <= cp <= 0x303F or 0xFF00 <= cp <= 0xFFEF):
+            good += 1
+        else:
+            bad += 1
+    total = good + bad
+    return good / total if total else 1.0
+
+
+def _heuristic_encoding(data):
+    """Dependency-free fallback: BOM / strict UTF-8 trial / scored CJK."""
+    if data.startswith(codecs.BOM_UTF8):
+        return 'utf-8-sig'
+    if data[:2] in (codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE):
+        return 'utf-16'
+    try:
+        data.decode('utf-8')
+        return 'utf-8'
+    except UnicodeDecodeError:
+        pass
+    best = None
+    for enc in ('gb18030', 'big5'):
+        try:
+            ratio = _score_cjk(data.decode(enc))
+        except UnicodeDecodeError:
+            continue
+        if best is None or ratio > best[1]:
+            best = (enc, ratio)
+    if best is not None:
+        return best[0]
+    for enc in ('gb18030', 'latin-1'):
+        try:
+            data.decode(enc)
+            return enc
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return 'latin-1'
+
+
+def detect_encoding(data):
+    """Auto-detect the encoding of ``data`` (bytes): BOM sniff, then
+    chardet (when available) normalized to a known set, validated by a
+    trial decode, with a stdlib heuristic as fallback."""
+    if data.startswith(codecs.BOM_UTF8):
+        return 'utf-8-sig'
+    if data[:2] in (codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE):
+        return 'utf-16'
+    candidate = None
+    if chardet is not None:
+        enc = chardet.detect(data)['encoding'] or 'utf-8'
+        low = enc.lower().replace('_', '-')
+        if low == 'gb2312':
+            candidate = 'gb18030'
+        elif low.startswith('iso-8859'):
+            candidate = 'gbk'
+        elif low in KNOWN_ENCODINGS:
+            candidate = low
+        else:
+            candidate = 'gb18030'
+        try:
+            data.decode(candidate)
+            return candidate
+        except (UnicodeDecodeError, LookupError):
+            pass
+    return _heuristic_encoding(data)
+
+
+def add_magic_comment(text, encoding):
+    """Prepend a ``% !TeX encoding`` comment when none exists; returns
+    (text, added)."""
+    if MAGIC_COMMENT_RE.search(text):
+        return text, False
+    nl = '\r\n' if '\r\n' in text[:200] else '\n'
+    return '% !TeX encoding = {}{}'.format(encoding, nl) + text, True
 
 
 @dataclass
 class FormatOptions:
     """Formatting toggles; the defaults reproduce the rules as applied.
 
-    ``write_encoding=None`` means "write back in ``read_encoding``".
+    ``read_encoding=None`` means auto-detect per file;
+    ``write_encoding=None`` means "write back in the detected encoding".
     """
 
     punct: bool = True
     commands: bool = True
     tight_ranges: bool = True
     backup: bool = True
-    read_encoding: str = 'utf-8'
+    magic_comment: bool = True
+    read_encoding: Optional[str] = None
     write_encoding: Optional[str] = None
 
-    def effective_write_encoding(self):
-        return self.write_encoding or self.read_encoding
+    def effective_write_encoding(self, read_encoding):
+        return self.write_encoding or read_encoding
 
 
 class Protector:
@@ -187,22 +286,32 @@ def format_source(source, opts=None):
 
 
 def format_file(path, opts=None):
-    """Read a file and return (source, result, count); raises on IO,
-    encoding or unbalanced-$ errors."""
+    """Read a file (auto-detect its encoding unless overridden), format
+    it, and return (source, result, count, read_encoding); raises on IO
+    or unbalanced-$ errors."""
     opts = opts or FormatOptions()
-    with open(path, encoding=opts.read_encoding, newline='') as fh:
-        source = fh.read()
+    with open(path, 'rb') as fh:
+        raw = fh.read()
+    read_enc = (opts.read_encoding if opts.read_encoding is not None
+                else detect_encoding(raw))
+    source = raw.decode(read_enc)
     result, count = format_source(source, opts)
-    return source, result, count
+    if opts.magic_comment:
+        out_enc = opts.effective_write_encoding(read_enc)
+        result, _added = add_magic_comment(result, out_enc)
+    return source, result, count, read_enc
 
 
 def process_file(path, check, opts=None):
     opts = opts or FormatOptions()
     try:
-        source, result, count = format_file(path, opts)
+        source, result, count, read_enc = format_file(path, opts)
     except (ValueError, OSError, LookupError) as exc:
         print('{}: ERROR: {}'.format(path, exc))
         return True, False
+    out_enc = opts.effective_write_encoding(read_enc)
+    enc_info = read_enc if read_enc == out_enc else '{} -> {}'.format(
+        read_enc, out_enc)
 
     orig = source.splitlines()
     new = result.splitlines()
@@ -213,16 +322,16 @@ def process_file(path, check, opts=None):
         lineterm=''))
 
     if not diff:
-        print('{}: already formatted, no changes'.format(path))
+        print('{}: already formatted, no changes ({})'.format(path, enc_info))
         return False, False
 
     changed = sum(1 for a, b in zip(orig, new) if a != b)
     changed += abs(len(orig) - len(new))
-    print('{}: {} spacing insertion(s) on {} line(s)'.format(path, count, changed))
+    print('{}: {} spacing insertion(s) on {} line(s) ({})'.format(
+        path, count, changed, enc_info))
     print('\n'.join(diff))
 
     if not check:
-        out_enc = opts.effective_write_encoding()
         try:
             data = result.encode(out_enc)
         except (ValueError, LookupError) as exc:
@@ -236,7 +345,11 @@ def process_file(path, check, opts=None):
                 print('{}: original saved to {}'.format(path, backup))
         with open(path, 'wb') as fh:
             fh.write(data)
-        print('{}: written as {}'.format(path, out_enc))
+        if read_enc == out_enc:
+            print('{}: written as {}'.format(path, out_enc))
+        else:
+            print('{}: written as {} (detected {})'.format(
+                path, out_enc, read_enc))
     return False, True
 
 
@@ -300,11 +413,16 @@ def main(argv=None):
                         help='space page-range dashes too (1820 $-$ 1830)')
     parser.add_argument('--no-backup', action='store_true',
                         help='do not create a .bak backup before writing')
-    parser.add_argument('--input-encoding', metavar='NAME', default='utf-8',
-                        help='encoding of the input file(s) (default: utf-8)')
+    parser.add_argument('--no-magic-comment', action='store_true',
+                        help='do not add "%% !TeX encoding" magic comments '
+                             '(default: add when missing)')
+    parser.add_argument('--input-encoding', metavar='NAME', default=None,
+                        help='override the auto-detected input encoding '
+                             '(default: auto-detect)')
     parser.add_argument('--output-encoding', metavar='NAME', default=None,
                         help='encoding for the written file(s) '
-                             '(default: same as --input-encoding)')
+                             '(default: same as each file\'s detected '
+                             'encoding)')
     parser.add_argument('--extension', metavar='EXT', default='.tex',
                         help='file extension used when scanning directories '
                              '(default: .tex)')
@@ -317,6 +435,7 @@ def main(argv=None):
         commands=not args.no_commands,
         tight_ranges=not args.loose_ranges,
         backup=not args.no_backup,
+        magic_comment=not args.no_magic_comment,
         read_encoding=args.input_encoding,
         write_encoding=args.output_encoding,
     )
