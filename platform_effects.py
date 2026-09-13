@@ -46,7 +46,6 @@ def _macos(window, dark):
 
     import objc
     import AppKit
-    from Foundation import NSMakeRect  # noqa: F401  (ensures Foundation loads)
 
     content = objc.objc_object(c_void_p=int(window.winId()))
     nswin = content.window()
@@ -72,11 +71,31 @@ def _macos(window, dark):
         effect.setState_(AppKit.NSVisualEffectStateFollowsWindowActiveState)
         applied = 'vibrancy'
 
-    effect.setFrame_(content.bounds())
-    effect.setAutoresizingMask_(AppKit.NSViewWidthSizable
-                                 | AppKit.NSViewHeightSizable)
-    content.addSubview_positioned_relativeTo_(effect, AppKit.NSWindowBelow,
-                                              None)
+    # A subview always composites ABOVE its superview's own drawing, and
+    # Qt renders the whole widget tree into the top-level NSView - so the
+    # material must become a SIBLING behind Qt's view, not a child of it.
+    # Wrap: container becomes the window's contentView; the material view
+    # is added first (back layer), then Qt's view on top.
+    old = nswin.contentView()
+    container = AppKit.NSView.alloc().initWithFrame_(old.frame())
+    container.setAutoresizingMask_(AppKit.NSViewWidthSizable
+                                   | AppKit.NSViewHeightSizable)
+    nswin.setContentView_(container)
+    try:
+        effect.setFrame_(container.bounds())
+        effect.setAutoresizingMask_(AppKit.NSViewWidthSizable
+                                     | AppKit.NSViewHeightSizable)
+        container.addSubview_(effect)
+        old.setFrame_(container.bounds())
+        old.setAutoresizingMask_(AppKit.NSViewWidthSizable
+                                  | AppKit.NSViewHeightSizable)
+        container.addSubview_(old)
+    except Exception:
+        try:
+            nswin.setContentView_(old)
+        except Exception:
+            pass
+        raise
     return applied
 
 
