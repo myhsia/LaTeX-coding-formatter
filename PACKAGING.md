@@ -86,6 +86,13 @@ format-tex --extension .ctx .      # 扫描目录下所有 *.ctx 文件
 format-tex --extension .tex --recursive .   # 递归扫描 (含子目录)
 ```
 
-注意: 从源码运行需要 `pip install chardet`; 打包的二进制文件已内置 chardet。
+注意: 从源码运行需要 `pip install chardet PySide6-Essentials`
+(macOS 另需 `pyobjc-framework-Cocoa` 用于 Liquid Glass 窗口效果);
+打包的二进制文件已内置全部依赖。
+
+GUI 基于 Qt (PySide6), 应用系统原生窗口材质: macOS 26+ 使用
+Liquid Glass (NSGlassEffectView), 更早的 macOS 使用毛玻璃 (vibrancy),
+Windows 11 使用 Mica (旧版回退到 Acrylic/纯色), Linux 使用系统
+Qt 主题并跟随深浅色模式。
 
 规则详见 `format_tex.py` 模块文档字符串。

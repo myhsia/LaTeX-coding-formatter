@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
-r"""Tkinter GUI for format_tex.py: insert CJK/Latin spacing in TeX files
-with a file picker, rule toggles, and a diff preview pane.
+r"""PySide6 GUI for format_tex.py: insert CJK/Latin spacing in TeX files
+with a file picker, directory scanning, rule toggles, per-file encoding
+auto-detection, and a colorized diff preview pane.
+
+Native window materials: macOS Liquid Glass / vibrancy, Windows Mica
+(see platform_effects.py).
 
 Usage
 -----
@@ -12,165 +16,154 @@ import os
 import shutil
 import sys
 import traceback
-import tkinter as tk
-import tkinter.font as tkfont
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QFontDatabase, QPalette, QTextCharFormat, \
+    QTextCursor
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox,
+                               QFileDialog, QHBoxLayout, QLabel, QListWidget,
+                               QMainWindow, QMessageBox, QPlainTextEdit,
+                               QPushButton, QVBoxLayout, QWidget)
 
 from format_tex import FormatOptions, format_file, scan_directory
+from platform_effects import apply_effects, notes
 
 ENCODINGS = ['同输入', 'utf-8', 'gb18030', 'gbk', 'gb2312', 'big5',
              'utf-16', 'latin-1']
 EXTENSIONS = ['.tex', '.ctx', '.sty', '.cls', '.txt']
 
 LIGHT = {
-    'text_bg': '#fafafa', 'text_fg': '#1a1a1a', 'insert': '#000000',
-    'list_bg': '#ffffff', 'list_fg': '#1a1a1a',
-    'status_bg': '#f0f0f0', 'status_fg': '#1a1a1a',
+    'text_bg': '#fafafa', 'text_fg': '#1a1a1a',
     'add': '#098658', 'del': '#a31515', 'meta': '#0550ae',
 }
 DARK = {
-    'text_bg': '#1e1e1e', 'text_fg': '#d4d4d4', 'insert': '#d4d4d4',
-    'list_bg': '#252526', 'list_fg': '#d4d4d4',
-    'status_bg': '#2d2d2d', 'status_fg': '#d4d4d4',
+    'text_bg': '#1e1e1e', 'text_fg': '#d4d4d4',
     'add': '#4ec9b0', 'del': '#f48771', 'meta': '#569cd6',
 }
 
 
-def detect_dark(root):
-    for name in ('systemTextBackgroundColor', 'systemWindowBackground'):
+def detect_dark(app):
+    try:
+        return app.styleHints().colorScheme() == Qt.ColorScheme.Dark
+    except Exception:
         try:
-            r, g, b = root.winfo_rgb(name)
-            return (r + g + b) / 3 < 32768
+            return app.palette().color(QPalette.ColorRole.Window).lightness() \
+                < 128
         except Exception:
-            continue
-    return False
+            return False
 
 
-def diff_tag(line):
-    if line.startswith(('+++', '---', '@@')):
-        return 'meta'
-    if line.startswith('+'):
-        return 'add'
-    if line.startswith('-'):
-        return 'del'
-    return None
+class MainWindow(QMainWindow):
 
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle('TeX 中英文混排格式化工具')
+        self.resize(980, 700)
+        self.setMinimumSize(760, 560)
 
-class App:
+        self.dark = detect_dark(QApplication.instance())
+        self.pal = DARK if self.dark else LIGHT
 
-    def __init__(self, root):
-        self.root = root
-        root.report_callback_exception = self.report_callback_exception
-        root.title('TeX 中英文混排格式化工具')
-        root.geometry('940x680')
-        root.minsize(720, 520)
+        central = QWidget()
+        self.setCentralWidget(central)
+        central.setStyleSheet('background: transparent;')
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
 
-        fixed = tkfont.nametofont('TkFixedFont')
-        self.pal = DARK if detect_dark(root) else LIGHT
+        top = QHBoxLayout()
+        pick = QPushButton('选择文件…')
+        pick.clicked.connect(self.add_files)
+        scan = QPushButton('扫描目录…')
+        scan.clicked.connect(self.scan_dir)
+        self.btn_clear = QPushButton('清空列表')
+        self.btn_clear.clicked.connect(self.clear_files)
+        top.addWidget(pick)
+        top.addWidget(scan)
+        top.addWidget(QLabel('扩展名'))
+        self.ext_edit = QComboBox()
+        self.ext_edit.setEditable(True)
+        self.ext_edit.addItems(EXTENSIONS)
+        self.ext_edit.setEditText('.tex')
+        top.addWidget(self.ext_edit)
+        self.chk_recursive = QCheckBox('含子目录')
+        top.addWidget(self.chk_recursive)
+        top.addWidget(self.btn_clear)
+        top.addStretch(1)
+        layout.addLayout(top)
 
-        top = tk.Frame(root)
-        top.pack(fill='x', padx=8, pady=(8, 4))
-        tk.Button(top, text='选择文件…', command=self.add_files,
-                  width=12).pack(side='left')
-        tk.Button(top, text='扫描目录…', command=self.scan_dir,
-                  width=12).pack(side='left', padx=(6, 0))
-        tk.Label(top, text='扩展名').pack(side='left', padx=(14, 2))
-        self.var_ext = tk.StringVar(value='.tex')
-        self.var_recursive = tk.BooleanVar(value=False)
-        ext_box = ttk.Combobox(top, textvariable=self.var_ext,
-                               values=EXTENSIONS, width=8)
-        ext_box.pack(side='left')
-        tk.Checkbutton(top, text='含子目录',
-                       variable=self.var_recursive).pack(side='left',
-                                                         padx=(8, 0))
-        tk.Button(top, text='清空列表', command=self.clear_files,
-                  width=10).pack(side='left', padx=(14, 0))
+        self.file_list = QListWidget()
+        layout.addWidget(self.file_list)
 
-        list_frame = tk.Frame(root)
-        list_frame.pack(fill='x', padx=8)
-        self.file_list = tk.Listbox(
-            list_frame, height=6,
-            background=self.pal['list_bg'], foreground=self.pal['list_fg'])
-        list_scroll = tk.Scrollbar(list_frame, command=self.file_list.yview)
-        self.file_list.configure(yscrollcommand=list_scroll.set)
-        self.file_list.pack(side='left', fill='x', expand=True)
-        list_scroll.pack(side='right', fill='y')
+        options = QLabel('选项:')
+        layout.addWidget(options)
+        grid = QHBoxLayout()
+        col1 = QVBoxLayout()
+        col2 = QVBoxLayout()
+        col3 = QVBoxLayout()
+        self.chk_punct = QCheckBox('半角标点前后加空格')
+        self.chk_punct.setChecked(True)
+        self.chk_commands = QCheckBox('CJK 与命令之间加空格')
+        self.chk_commands.setChecked(True)
+        self.chk_tight = QCheckBox('页码范围保持紧凑')
+        self.chk_tight.setChecked(True)
+        self.chk_backup = QCheckBox('生成备份文件 (.bak)')
+        self.chk_backup.setChecked(True)
+        self.chk_magic = QCheckBox('添加编码魔法注释')
+        self.chk_magic.setChecked(True)
+        self.chk_check = QCheckBox('仅检查 (不写入文件)')
+        for w in (self.chk_punct, self.chk_tight, self.chk_magic):
+            col1.addWidget(w)
+        for w in (self.chk_commands, self.chk_backup, self.chk_check):
+            col2.addWidget(w)
+        grid.addLayout(col1)
+        grid.addLayout(col2)
+        grid.addStretch(1)
+        layout.addLayout(grid)
 
-        options = tk.LabelFrame(root, text='选项')
-        options.pack(fill='x', padx=8, pady=6)
-        self.var_punct = tk.BooleanVar(value=True)
-        self.var_commands = tk.BooleanVar(value=True)
-        self.var_tight = tk.BooleanVar(value=True)
-        self.var_backup = tk.BooleanVar(value=True)
-        self.var_magic = tk.BooleanVar(value=True)
-        self.var_check = tk.BooleanVar(value=False)
-        for row, cols in enumerate([
-            [('半角标点前后加空格', self.var_punct),
-             ('CJK 与命令之间加空格', self.var_commands)],
-            [('页码范围保持紧凑', self.var_tight),
-             ('生成备份文件 (.bak)', self.var_backup)],
-            [('添加编码魔法注释', self.var_magic),
-             ('仅检查 (不写入文件)', self.var_check)],
-        ]):
-            for col, item in enumerate(cols):
-                if item is None:
-                    continue
-                text, var = item
-                tk.Checkbutton(options, text=text, variable=var,
-                               anchor='w').grid(row=row, column=col,
-                                                sticky='w', padx=8, pady=2)
-        options.columnconfigure(0, weight=1)
-        options.columnconfigure(1, weight=1)
+        enc = QHBoxLayout()
+        enc.addWidget(QLabel('输出编码'))
+        self.enc_out = QComboBox()
+        self.enc_out.setEditable(True)
+        self.enc_out.addItems(ENCODINGS)
+        self.enc_out.setCurrentText('同输入')
+        enc.addWidget(self.enc_out)
+        enc.addWidget(QLabel('(输入编码自动检测; 输出默认同输入编码, '
+                             '也可输入任意编码名)'))
+        enc.addStretch(1)
+        layout.addLayout(enc)
 
-        enc_frame = tk.LabelFrame(root, text='文件编码')
-        enc_frame.pack(fill='x', padx=8, pady=(0, 6))
-        tk.Label(enc_frame, text='输出编码').pack(side='left', padx=(8, 2))
-        self.enc_out = ttk.Combobox(enc_frame, values=ENCODINGS, width=12)
-        self.enc_out.set('同输入')
-        self.enc_out.pack(side='left')
-        tk.Label(enc_frame, text='(输入编码自动检测; 输出默认同输入编码, '
-                                 '也可输入任意编码名)').pack(
-            side='left', padx=(10, 8))
+        actions = QHBoxLayout()
+        self.btn_preview = QPushButton('预览差异')
+        self.btn_preview.clicked.connect(lambda: self.run(write=False))
+        self.btn_apply = QPushButton('应用格式化')
+        self.btn_apply.clicked.connect(lambda: self.run(write=True))
+        actions.addWidget(self.btn_preview)
+        actions.addWidget(self.btn_apply)
+        actions.addStretch(1)
+        layout.addLayout(actions)
 
-        actions = tk.Frame(root)
-        actions.pack(fill='x', padx=8, pady=(0, 4))
-        tk.Button(actions, text='预览差异', command=lambda: self.run(write=False),
-                  width=12).pack(side='left')
-        tk.Button(actions, text='应用格式化', command=lambda: self.run(write=True),
-                  width=12).pack(side='left', padx=(6, 0))
-
-        out_frame = tk.Frame(root)
-        out_frame.pack(fill='both', expand=True, padx=8)
-        self.output = tk.Text(out_frame, font=fixed, wrap='none',
-                              state='disabled',
-                              background=self.pal['text_bg'],
-                              foreground=self.pal['text_fg'],
-                              insertbackground=self.pal['insert'])
+        self.output = QPlainTextEdit()
+        self.output.setReadOnly(True)
+        self.output.setFont(QFontDatabase.systemFont(
+            QFontDatabase.SystemFont.FixedFont))
+        self.output.setStyleSheet(
+            'QPlainTextEdit {{ background: {}; color: {}; }}'.format(
+                self.pal['text_bg'], self.pal['text_fg']))
         for tag, color in (('add', self.pal['add']),
                            ('del', self.pal['del']),
                            ('meta', self.pal['meta'])):
-            self.output.tag_configure(tag, foreground=color)
-        y_scroll = tk.Scrollbar(out_frame, command=self.output.yview)
-        x_scroll = tk.Scrollbar(out_frame, command=self.output.xview,
-                                orient='horizontal')
-        self.output.configure(yscrollcommand=y_scroll.set,
-                              xscrollcommand=x_scroll.set)
-        self.output.grid(row=0, column=0, sticky='nsew')
-        y_scroll.grid(row=0, column=1, sticky='ns')
-        x_scroll.grid(row=1, column=0, sticky='ew')
-        out_frame.rowconfigure(0, weight=1)
-        out_frame.columnconfigure(0, weight=1)
+            fmt = QTextCharFormat()
+            fmt.setForeground(QColor(color))
+            setattr(self, 'fmt_' + tag, fmt)
+        layout.addWidget(self.output, 1)
 
-        self.status = tk.StringVar(value='就绪')
-        self.status_label = tk.Label(
-            root, textvariable=self.status, anchor='w', relief='sunken',
-            background=self.pal['status_bg'],
-            foreground=self.pal['status_fg'])
-        self.status_label.pack(fill='x', side='bottom')
+        self.effect_note = apply_effects(self, self.dark)
+        for msg in notes():
+            self.show_error(msg + '\n')
 
-    def set_status(self, text):
-        self.status.set(text)
+    # ---------- helpers ----------
 
     def log_path(self):
         cwd = Path.cwd()
@@ -178,15 +171,11 @@ class App:
             return cwd / 'format_tex_gui.log'
         return Path.home() / 'format_tex_gui.log'
 
-    def report_callback_exception(self, exc_type, exc_value, exc_tb):
-        self.show_error(''.join(
-            traceback.format_exception(exc_type, exc_value, exc_tb)))
-
     def show_error(self, text):
         try:
             self.append('[内部错误]\n{}\n'.format(text))
             last = text.splitlines()[-1] if text else ''
-            self.set_status('内部错误: {}'.format(last))
+            self.statusBar().showMessage('内部错误: {}'.format(last))
         except Exception:
             pass
         try:
@@ -195,63 +184,63 @@ class App:
         except Exception:
             pass
 
-    def append(self, text):
-        self.output.configure(state='normal')
-        self.output.insert('end', text)
-        self.output.configure(state='disabled')
-
-    def append_tagged(self, text, tag):
-        self.output.configure(state='normal')
-        self.output.insert('end', text, (tag,) if tag else ())
-        self.output.configure(state='disabled')
+    def append(self, text, fmt=None):
+        cursor = self.output.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        if fmt is None:
+            cursor.insertText(text)
+        else:
+            cursor.insertText(text, fmt)
+        self.output.setTextCursor(cursor)
 
     def clear_output(self):
-        self.output.configure(state='normal')
-        self.output.delete('1.0', 'end')
-        self.output.configure(state='disabled')
+        self.output.clear()
+
+    def write_encoding(self):
+        value = self.enc_out.currentText().strip()
+        return None if (not value or value == '同输入') else value
 
     def _add_paths(self, paths):
-        existing = set(self.file_list.get(0, tk.END))
+        existing = {self.file_list.item(i).text()
+                    for i in range(self.file_list.count())}
         added = 0
         for name in paths:
             if name not in existing:
-                self.file_list.insert(tk.END, name)
+                self.file_list.addItem(name)
                 added += 1
-        self.set_status('已选择 {} 个文件 (新增 {} 个)'.format(
-            self.file_list.size(), added))
+        self.statusBar().showMessage('已选择 {} 个文件 (新增 {} 个)'.format(
+            self.file_list.count(), added))
+
+    # ---------- actions ----------
 
     def add_files(self):
-        names = filedialog.askopenfilenames(
-            title='选择 TeX 文件',
-            filetypes=[('TeX 文件', '*.tex'), ('所有文件', '*.*')])
+        names, _filter = QFileDialog.getOpenFileNames(
+            self, '选择 TeX 文件', '',
+            'TeX 文件 (*.tex);;所有文件 (*.*)')
         self._add_paths(names)
 
     def scan_dir(self):
-        initial = None
-        items = self.file_list.get(0, tk.END)
-        if items:
-            initial = str(Path(items[0]).parent)
-        directory = filedialog.askdirectory(
-            title='选择要扫描的目录', initialdir=initial)
+        initial = ''
+        if self.file_list.count():
+            initial = str(Path(self.file_list.item(0).text()).parent)
+        directory = QFileDialog.getExistingDirectory(
+            self, '选择要扫描的目录', initial)
         if not directory:
             return
         try:
             matches = scan_directory(Path(directory),
-                                     self.var_ext.get().strip() or '.tex',
-                                     self.var_recursive.get())
-        except Exception as exc:
+                                     self.ext_edit.currentText().strip()
+                                     or '.tex',
+                                     self.chk_recursive.isChecked())
+        except Exception:
             self.show_error(traceback.format_exc())
             return
         self._add_paths([str(p) for p in matches])
 
     def clear_files(self):
-        self.file_list.delete(0, tk.END)
+        self.file_list.clear()
         self.clear_output()
-        self.set_status('列表已清空')
-
-    def write_encoding(self):
-        value = self.enc_out.get().strip()
-        return None if (not value or value == '同输入') else value
+        self.statusBar().showMessage('列表已清空')
 
     def run(self, write):
         try:
@@ -260,23 +249,25 @@ class App:
             self.show_error(traceback.format_exc())
 
     def _run(self, write):
-        paths = [Path(p) for p in self.file_list.get(0, tk.END)]
+        paths = [Path(self.file_list.item(i).text())
+                 for i in range(self.file_list.count())]
         if not paths:
-            self.set_status('请先选择 TeX 文件')
+            self.statusBar().showMessage('请先选择 TeX 文件')
             return
         opts = FormatOptions(
-            punct=self.var_punct.get(),
-            commands=self.var_commands.get(),
-            tight_ranges=self.var_tight.get(),
-            backup=self.var_backup.get(),
-            magic_comment=self.var_magic.get(),
+            punct=self.chk_punct.isChecked(),
+            commands=self.chk_commands.isChecked(),
+            tight_ranges=self.chk_tight.isChecked(),
+            backup=self.chk_backup.isChecked(),
+            magic_comment=self.chk_magic.isChecked(),
             write_encoding=self.write_encoding(),
         )
 
         results = []
         for path in paths:
             entry = {'path': path, 'count': 0, 'changed': False,
-                     'error': None, 'diff': [], 'result': None}
+                     'error': None, 'diff': [], 'result': None,
+                     'read_enc': None}
             if not path.is_file():
                 entry['error'] = '文件不存在'
             else:
@@ -294,10 +285,11 @@ class App:
                     entry['error'] = '{}: {}'.format(type(exc).__name__, exc)
             results.append(entry)
 
-        will_write = write and not self.var_check.get()
+        will_write = write and not self.chk_check.isChecked()
         n_change = sum(1 for e in results if e['changed'])
-        if will_write and n_change and not messagebox.askyesno(
-                '确认', '将修改 {} 个文件, 是否继续?'.format(n_change)):
+        if will_write and n_change and QMessageBox.question(
+                self, '确认', '将修改 {} 个文件, 是否继续?'.format(
+                    n_change)) != QMessageBox.StandardButton.Yes:
             will_write = False
 
         self.clear_output()
@@ -314,7 +306,15 @@ class App:
                 self.append('已符合格式, 无需修改\n\n')
                 continue
             for line in e['diff']:
-                self.append_tagged(line + '\n', diff_tag(line))
+                tag = None
+                if line.startswith(('+++', '---', '@@')):
+                    tag = 'meta'
+                elif line.startswith('+'):
+                    tag = 'add'
+                elif line.startswith('-'):
+                    tag = 'del'
+                fmt = getattr(self, 'fmt_' + tag) if tag else None
+                self.append(line + '\n', fmt)
             self.append('\n')
             if will_write:
                 out_enc = opts.effective_write_encoding(e.get('read_enc'))
@@ -337,17 +337,25 @@ class App:
                 self.append('>>> 需 {} 处修改 [未写入]\n\n'.format(e['count']))
 
         errors = sum(1 for e in results if e['error']) + write_errors
-        unchanged = sum(1 for e in results if not e['error'] and not e['changed'])
-        suffix = '  [仅检查模式]' if self.var_check.get() else ''
-        self.set_status('需修改: {}  已符合: {}  错误: {}{}'.format(
+        unchanged = sum(1 for e in results
+                        if not e['error'] and not e['changed'])
+        suffix = '  [仅检查模式]' if self.chk_check.isChecked() else ''
+        self.statusBar().showMessage('需修改: {}  已符合: {}  错误: {}{}'.format(
             n_change, unchanged, errors, suffix))
 
 
 def main():
-    root = tk.Tk()
-    App(root)
-    root.mainloop()
-    return 0
+    app = QApplication(sys.argv)
+    app.setApplicationName('TeX 中英文混排格式化工具')
+    if sys.platform.startswith('linux') and detect_dark(app):
+        app.setStyle('Fusion')
+    window = MainWindow()
+    sys.excepthook = lambda t, v, tb: window.show_error(
+        ''.join(traceback.format_exception(t, v, tb)))
+    window.statusBar().showMessage(
+        '就绪 (窗口效果: {})'.format(window.effect_note))
+    window.show()
+    return app.exec()
 
 
 if __name__ == '__main__':
