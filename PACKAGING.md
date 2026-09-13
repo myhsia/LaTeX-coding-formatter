@@ -93,10 +93,11 @@ format-tex --extension .tex --recursive .   # 递归扫描 (含子目录)
 (macOS 另需 `pyobjc-framework-Cocoa` 用于 Liquid Glass 窗口效果);
 打包的二进制文件已内置全部依赖。
 
-GUI 基于 Qt (PySide6), 应用系统原生窗口材质: macOS 26+ 使用
-Liquid Glass (NSGlassEffectView, 仅覆盖标题栏区域, 标题栏与内容区
-之间有系统分隔线, 内容区为不透明窗口底色), 更早的 macOS 使用毛玻璃
-(vibrancy), Windows 11 使用 Mica (旧版回退到 Acrylic/纯色),
+GUI 基于 Qt (PySide6), macOS 上使用系统原生统一工具栏 (NSToolbar
+unified): 标题栏为系统模糊材质的高栏 (约 52 pt), 红黄绿按钮居中,
+标题栏与内容区之间有系统分隔线, 内容区为不透明窗口底色;
+更早的 macOS / 无工具栏时回退到系统外观。
+Windows 11 使用 Mica (旧版回退到 Acrylic/纯色),
 Linux 使用系统 Qt 主题并跟随深浅色模式。
 
 规则详见 `format_tex.py` 模块文档字符串。

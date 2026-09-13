@@ -4,8 +4,8 @@ with a file picker, directory scanning, drag & drop of files/folders,
 rule toggles, per-file encoding auto-detection, and a colorized diff
 preview pane.
 
-Native window materials: macOS Liquid Glass / vibrancy, Windows Mica
-(see platform_effects.py).
+Native window chrome: macOS native unified toolbar (system blur),
+Windows Mica (see platform_effects.py).
 
 Usage
 -----
@@ -29,8 +29,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
                                QWidget)
 
 from format_tex import FormatOptions, format_file, scan_directory
-from platform_effects import (apply_effects, last_material_view, notes,
-                              prepare_qt, reposition_material)
+from platform_effects import (apply_effects, notes, prepare_qt,
+                              titlebar_height)
 
 ENCODINGS = ['同输入', 'utf-8', 'gb18030', 'gbk', 'gb2312', 'big5',
              'utf-16', 'latin-1']
@@ -207,8 +207,8 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         # Scoped selector: only this widget is painted (children keep
-        # their own fills). The material is confined to the title bar,
-        # so the content area is an opaque window-coloured panel.
+        # their own fills). The title bar is a native toolbar above, so
+        # the content area is an opaque window-coloured panel.
         central.setObjectName('central')
         window_color = self.palette().color(QPalette.ColorRole.Window)
         central.setStyleSheet('#central {{ background: {}; }}'.format(
@@ -310,10 +310,6 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
         self.apply_window_effects()
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        reposition_material(self)
-
     def event(self, ev):
         if ev.type() == QEvent.Type.WinIdChange and self._effects_applied:
             self.apply_window_effects()
@@ -330,9 +326,9 @@ class MainWindow(QMainWindow):
             '就绪 (窗口效果: {})'.format(self.effect_note))
 
     def self_test(self):
-        """Assert the native window is visible, the material view sits
-        below the Qt view, and widgets paint their own backgrounds over
-        the glass; writes format_tex_gui_selftest.txt and returns
+        """Assert the native window is visible, carries the unified
+        toolbar (tall blurred bar), and that widgets paint their own
+        backgrounds; writes format_tex_gui_selftest.txt and returns
         True/False (for the --self-test exit code)."""
         import objc
         import AppKit
@@ -345,14 +341,24 @@ class MainWindow(QMainWindow):
             lines.append('window visible: {}'.format(visible))
             ok = ok and visible
             theme = qt_view.superview()
-            subs = list(theme.subviews())
-            idx_qt = next((i for i, s in enumerate(subs) if s is qt_view),
-                          None)
-            material = last_material_view()
-            below = (material is not None and material in subs
-                     and idx_qt is not None and subs.index(material) < idx_qt)
-            lines.append('material below Qt view: {}'.format(below))
-            ok = ok and below
+
+            # native unified toolbar provides the tall blurred bar
+            tb = nswin.toolbar()
+            toolbar_ok = (tb is not None
+                          and nswin.toolbarStyle()
+                          == AppKit.NSWindowToolbarStyleUnified)
+            lines.append('native unified toolbar: {}'.format(toolbar_ok))
+            ok = ok and toolbar_ok
+            bar_height = titlebar_height(nswin)
+            tall_ok = bar_height > 40
+            lines.append('toolbar-tall bar ({:.0f} pt > 40): {}'.format(
+                bar_height, tall_ok))
+            ok = ok and tall_ok
+            glass_present = any('GlassEffectView' in type(s).__name__
+                                for s in theme.subviews())
+            lines.append('no NSGlassEffectView band: {}'.format(
+                not glass_present))
+            ok = ok and not glass_present
             lines.append('contentView is Qt view: {}'.format(
                 nswin.contentView() is qt_view))
             lines.append('effect: {}'.format(self.effect_note))
@@ -379,18 +385,6 @@ class MainWindow(QMainWindow):
             lines.append('placeholder shown when empty: {}'.format(
                 placeholder_visible))
             ok = ok and placeholder_visible
-
-            # material must be confined to the title bar strip
-            tb_height = nswin.frame().size.height - \
-                nswin.contentRectForFrameRect_(nswin.frame()).size.height
-            mf = material.frame()
-            confined = (0 < mf.size.height <= tb_height + 1
-                        and abs((mf.origin.y + mf.size.height)
-                                - theme.bounds().size.height) < 2)
-            lines.append('material confined to title bar ({} of {} pt, '
-                         'top-flush): {}'.format(mf.size.height, tb_height,
-                                                 confined))
-            ok = ok and confined
 
             # content area below the title bar must be opaque
             content_opaque, content_transparent = alpha_stats(
