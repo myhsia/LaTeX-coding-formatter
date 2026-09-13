@@ -26,14 +26,16 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
                                QComboBox, QFileDialog, QFrame, QHBoxLayout,
                                QInputDialog, QLabel, QListWidget,
                                QMainWindow, QMessageBox, QPlainTextEdit,
-                               QPushButton, QVBoxLayout, QWidget)
+                               QPushButton, QSplitter, QVBoxLayout, QWidget)
 
 from format_tex import FormatOptions, format_file, scan_directory
 from native_menu import (CUSTOM_SENTINEL, build_menu, menu_entries,
                          popup_native_menu)
 from platform_effects import (apply_effects, band_height,
-                              last_material_view, lights_inset, notes,
-                              prepare_qt, reposition_materials, title_gap)
+                              last_material_view, last_sidebar_view,
+                              lights_inset, notes, prepare_qt,
+                              reposition_materials, set_sidebar_width,
+                              title_gap)
 
 ENCODINGS = ['同输入', 'utf-8', 'gb18030', 'gbk', 'gb2312', 'big5',
              'utf-16', 'latin-1']
@@ -185,15 +187,14 @@ class DropListWidget(QListWidget):
 
     def statusBarHint(self):
         window = self.window()
-        if hasattr(window, 'statusBar'):
-            window.statusBar().showMessage('松开鼠标以添加文件/目录…')
+        if hasattr(window, 'set_status'):
+            window.set_status('松开鼠标以添加文件/目录…')
 
     def statusBarRestore(self):
         window = self.window()
-        if hasattr(window, 'statusBar'):
-            window.statusBar().showMessage(
-                '就绪 (窗口效果: {})'.format(
-                    getattr(window, 'effect_note', 'system theme')))
+        if hasattr(window, 'set_status'):
+            window.set_status('就绪 (窗口效果: {})'.format(
+                getattr(window, 'effect_note', 'system theme')))
 
 
 class NativeMenuCombo(QComboBox):
@@ -252,45 +253,71 @@ class MainWindow(QMainWindow):
 
         central = QWidget()
         self.setCentralWidget(central)
-        # The top band_height() points stay transparent so the native
-        # blur band (platform_effects) shows through; everything below
-        # is an opaque window-coloured panel with a hairline separator.
+        # Finder-like layout: the top band_height() points stay
+        # transparent so the native blur shows through, and the left
+        # sidebar column shares that material (full height). The right
+        # panel is opaque with a hairline separator under the band.
         window_color = self.palette().color(QPalette.ColorRole.Window)
         mid_color = self.palette().color(QPalette.ColorRole.Mid)
-        outer = QVBoxLayout(central)
+        outer = QHBoxLayout(central)
         outer.setContentsMargins(0, int(band_height()), 0, 0)
         outer.setSpacing(0)
+        self.outer_layout = outer
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(1)
+        outer.addWidget(splitter)
+        self.splitter = splitter
+
+        # --- left: sidebar (file list over the shared blur) ---
+        sidebar = QWidget()
+        sidebar.setMinimumWidth(180)
+        slayout = QVBoxLayout(sidebar)
+        slayout.setContentsMargins(12, 12, 12, 12)
+        slayout.setSpacing(8)
+        ext_row = QHBoxLayout()
+        ext_row.addWidget(QLabel('扩展名'))
+        self.ext_edit = NativeMenuCombo(EXTENSIONS, '.tex')
+        ext_row.addWidget(self.ext_edit, 1)
+        slayout.addLayout(ext_row)
+        self.chk_recursive = QCheckBox('含子目录')
+        slayout.addWidget(self.chk_recursive)
+        self.btn_clear = QPushButton('清空列表')
+        self.btn_clear.clicked.connect(self.clear_files)
+        slayout.addWidget(self.btn_clear)
+        self.file_list = DropListWidget(self.drop_paths, self.add_files,
+                                        self.scan_dir)
+        self.file_list.setStyleSheet(
+            'QListWidget { background: transparent; }'
+            'QListWidget::item { background: transparent; }')
+        self.file_list.viewport().setAutoFillBackground(False)
+        slayout.addWidget(self.file_list, 1)
+        self.sidebar = sidebar
+        splitter.addWidget(sidebar)
+
+        # --- right: opaque content panel ---
+        panel = QWidget()
+        panel.setObjectName('panel')
+        panel.setMinimumWidth(420)
+        panel.setStyleSheet('#panel {{ background: {}; }}'.format(
+            window_color.name()))
+        pv = QVBoxLayout(panel)
+        pv.setContentsMargins(12, 12, 12, 12)
+        pv.setSpacing(8)
         hairline = QFrame()
         hairline.setObjectName('hairline')
         hairline.setFixedHeight(1)
         hairline.setStyleSheet('#hairline {{ background: {}; }}'.format(
             mid_color.name()))
-        outer.addWidget(hairline)
-        panel = QWidget()
-        panel.setObjectName('panel')
-        panel.setStyleSheet('#panel {{ background: {}; }}'.format(
-            window_color.name()))
-        outer.addWidget(panel, 1)
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        pv.addWidget(hairline)
+        layout = pv
+        splitter.addWidget(panel)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([240, 740])
+        splitter.splitterMoved.connect(self._splitter_moved)
         self.content_panel = panel
-
-        top = QHBoxLayout()
-        top.addWidget(QLabel('扩展名'))
-        self.ext_edit = NativeMenuCombo(EXTENSIONS, '.tex')
-        top.addWidget(self.ext_edit)
-        self.chk_recursive = QCheckBox('含子目录')
-        top.addWidget(self.chk_recursive)
-        self.btn_clear = QPushButton('清空列表')
-        self.btn_clear.clicked.connect(self.clear_files)
-        top.addWidget(self.btn_clear)
-        top.addStretch(1)
-        layout.addLayout(top)
-
-        self.file_list = DropListWidget(self.drop_paths, self.add_files,
-                                        self.scan_dir)
-        layout.addWidget(self.file_list)
 
         options = QLabel('选项:')
         layout.addWidget(options)
@@ -352,6 +379,13 @@ class MainWindow(QMainWindow):
             setattr(self, 'fmt_' + tag, fmt)
         layout.addWidget(self.output, 1)
 
+        self.status_label = QLabel('就绪')
+        self.status_label.setObjectName('statuslabel')
+        self.status_label.setStyleSheet(
+            '#statuslabel {{ color: {}; padding-top: 2px; }}'.format(
+                self.palette().color(QPalette.ColorRole.WindowText).name()))
+        layout.addWidget(self.status_label)
+
         self.effect_note = None
         self._effects_applied = False
         self._notes_seen = 0
@@ -363,20 +397,38 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
         self.apply_window_effects()
 
+    def event(self, ev):
+        if ev.type() == QEvent.Type.WinIdChange and self._effects_applied:
+            self.apply_window_effects()
+        return super().event(ev)
+
+    def set_status(self, text):
+        """Update the status line (lives at the bottom of the content
+        panel so the sidebar can run the full window height)."""
+        self.status_label.setText(text)
+
+    def _splitter_moved(self, *_args):
+        self._sync_sidebar_width()
+        reposition_materials(self)
+
+    def _sync_sidebar_width(self):
+        set_sidebar_width(self.sidebar.width())
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._sync_sidebar_width()
         reposition_materials(self)
 
     def changeEvent(self, event):
         super().changeEvent(event)
         if event.type() in (QEvent.Type.ActivationChange,
                             QEvent.Type.WindowStateChange):
+            # no title bar in full screen - drop the transparent strip
+            full = bool(self.windowState() & Qt.WindowState.WindowFullScreen)
+            self.outer_layout.setContentsMargins(
+                0, 0 if full else int(band_height()), 0, 0)
+            self._sync_sidebar_width()
             reposition_materials(self)
-
-    def event(self, ev):
-        if ev.type() == QEvent.Type.WinIdChange and self._effects_applied:
-            self.apply_window_effects()
-        return super().event(ev)
 
     def apply_window_effects(self):
         self.effect_note = apply_effects(self, self.dark)
@@ -385,13 +437,17 @@ class MainWindow(QMainWindow):
         self._notes_seen = len(notes())
         for msg in new_notes:
             self.show_error(msg + '\n')
-        self.statusBar().showMessage(
+        self.set_status(
             '就绪 (窗口效果: {})'.format(self.effect_note))
         # AppKit re-lays the titlebar out asynchronously right after the
         # window is ordered front, undoing our centring - re-apply soon
         # after (0 ms) and once more shortly after (150 ms).
-        QTimer.singleShot(0, lambda: reposition_materials(self))
-        QTimer.singleShot(150, lambda: reposition_materials(self))
+        for delay in (0, 150, 400):
+            QTimer.singleShot(delay, self._reapply_materials)
+
+    def _reapply_materials(self):
+        self._sync_sidebar_width()
+        reposition_materials(self)
 
     def self_test(self):
         """Assert the native window is visible, carries the 52 pt
@@ -427,6 +483,32 @@ class MainWindow(QMainWindow):
             lines.append('no native toolbar: {}'.format(
                 nswin.toolbar() is None))
             ok = ok and nswin.toolbar() is None
+
+            # the sidebar shares the band's material, full height
+            sidebar_view = last_sidebar_view()
+            sb = sidebar_view.frame() if sidebar_view is not None else None
+            sidebar_ok = (
+                sb is not None
+                and sidebar_view.material()
+                == AppKit.NSVisualEffectMaterialSidebar
+                and abs(sb.origin.x) < 1
+                and abs(sb.size.width - self.sidebar.width()) < 2
+                and abs(sb.size.height - theme.bounds().size.height) < 2)
+            lines.append('sidebar shares the blur, full height, width '
+                         '{:.0f} pt: {}'.format(self.sidebar.width(),
+                                                sidebar_ok))
+            ok = ok and sidebar_ok
+
+            # left-right layout: the list lives in the sidebar column
+            list_right = self.file_list.mapTo(
+                self, self.file_list.rect().bottomRight()).x()
+            panel_left = self.content_panel.mapTo(self, self.content_panel
+                                                  .rect().topLeft()).x()
+            leftright_ok = list_right <= panel_left + 1
+            lines.append('left-right layout (list right {} <= panel left '
+                         '{}): {}'.format(list_right, panel_left,
+                                          leftright_ok))
+            ok = ok and leftright_ok
 
             def chrome_offset():
                 """Distance of the traffic-light centre from the window
@@ -500,10 +582,11 @@ class MainWindow(QMainWindow):
                             transparent += 1
                 return opaque, transparent
 
-            list_opaque, _ = alpha_stats(self.file_list.grab().toImage())
-            lines.append('file list paints a background: {}'.format(
-                list_opaque > 0))
-            ok = ok and list_opaque > 0
+            list_opaque, list_transparent = alpha_stats(
+                self.file_list.grab().toImage())
+            lines.append('file list is transparent over the sidebar '
+                         'material: {}'.format(list_transparent > 0))
+            ok = ok and list_transparent > 0
             placeholder = self.file_list.placeholder_widget()
             placeholder_visible = placeholder.isVisible()
             lines.append('placeholder shown when empty: {}'.format(
@@ -622,7 +705,7 @@ class MainWindow(QMainWindow):
         try:
             self.append('[内部错误]\n{}\n'.format(text))
             last = text.splitlines()[-1] if text else ''
-            self.statusBar().showMessage('内部错误: {}'.format(last))
+            self.set_status('内部错误: {}'.format(last))
         except Exception:
             pass
         try:
@@ -655,7 +738,7 @@ class MainWindow(QMainWindow):
             if name not in existing:
                 self.file_list.addItem(name)
                 added += 1
-        self.statusBar().showMessage('已选择 {} 个文件 (新增 {} 个)'.format(
+        self.set_status('已选择 {} 个文件 (新增 {} 个)'.format(
             self.file_list.count(), added))
         return added
 
@@ -709,7 +792,7 @@ class MainWindow(QMainWindow):
                         seen.add(str(path))
                         collected.append(str(path))
             added = self._add_paths(collected)
-            self.statusBar().showMessage(
+            self.set_status(
                 '拖入 {} 个文件、{} 个目录: 新增 {} 个文件 (共 {} 个)'.format(
                     n_files, n_dirs, added, self.file_list.count()))
         except Exception:
@@ -718,7 +801,7 @@ class MainWindow(QMainWindow):
     def clear_files(self):
         self.file_list.clear()
         self.clear_output()
-        self.statusBar().showMessage('列表已清空')
+        self.set_status('列表已清空')
 
     def run(self, write):
         try:
@@ -730,7 +813,7 @@ class MainWindow(QMainWindow):
         paths = [Path(self.file_list.item(i).text())
                  for i in range(self.file_list.count())]
         if not paths:
-            self.statusBar().showMessage('请先选择 TeX 文件')
+            self.set_status('请先选择 TeX 文件')
             return
         opts = FormatOptions(
             punct=self.chk_punct.isChecked(),
@@ -818,7 +901,7 @@ class MainWindow(QMainWindow):
         unchanged = sum(1 for e in results
                         if not e['error'] and not e['changed'])
         suffix = '  [仅检查模式]' if self.chk_check.isChecked() else ''
-        self.statusBar().showMessage('需修改: {}  已符合: {}  错误: {}{}'.format(
+        self.set_status('需修改: {}  已符合: {}  错误: {}{}'.format(
             n_change, unchanged, errors, suffix))
 
 
@@ -831,7 +914,7 @@ def main():
     window = MainWindow()
     sys.excepthook = lambda t, v, tb: window.show_error(
         ''.join(traceback.format_exception(t, v, tb)))
-    window.statusBar().showMessage(
+    window.set_status(
         '就绪 (窗口效果: {})'.format(window.effect_note))
     window.show()
     if selftest:

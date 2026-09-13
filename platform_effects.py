@@ -32,6 +32,8 @@ BAND_HEIGHT = 52.0
 LIGHTS_INSET = 19.0      # native unified-toolbar inset (Finder/Notes)
 TITLE_GAP = 8.0          # gap between the traffic lights and the title
 _BAND_VIEW = None
+_SIDEBAR_VIEW = None
+_SIDEBAR_WIDTH = 0.0
 
 
 def _note(msg):
@@ -73,6 +75,22 @@ def last_material_view():
     return _BAND_VIEW
 
 
+def last_sidebar_view():
+    """The sidebar material view inserted on macOS (for tests)."""
+    return _SIDEBAR_VIEW
+
+
+def set_sidebar_width(width):
+    """Tell the native layer how wide the Qt sidebar column is, so the
+    sidebar material can be framed to match (Finder-style full-height
+    sidebar sharing the title bar's blur layer)."""
+    global _SIDEBAR_WIDTH
+    try:
+        _SIDEBAR_WIDTH = max(0.0, float(width))
+    except (TypeError, ValueError):
+        _SIDEBAR_WIDTH = 0.0
+
+
 def prepare_qt(window):
     """Set Qt attributes that must precede the native window being
     shown (safe to call from __init__)."""
@@ -96,9 +114,9 @@ def apply_effects(window, dark=False):
 
 
 def reposition_materials(window):
-    """Re-fit the band and re-centre the native titlebar chrome. AppKit
-    resets both on resize/activation, so call this from the window's
-    resize/change handlers."""
+    """Re-fit the materials and re-centre the native titlebar chrome.
+    AppKit resets the chrome on resize/activation, so call this from the
+    window's resize/change handlers (and after the splitter moves)."""
     if sys.platform != 'darwin' or _BAND_VIEW is None:
         return
     try:
@@ -106,16 +124,25 @@ def reposition_materials(window):
         qt_view = objc.objc_object(c_void_p=int(window.winId()))
         nswin = qt_view.window()
         _place_band(nswin, qt_view.superview())
+        _place_sidebar(nswin, qt_view.superview())
         _align_titlebar(nswin)
     except Exception as exc:
         _note('reposition failed: {}: {}'.format(type(exc).__name__, exc))
+
+
+def _make_material_view(AppKit):
+    view = AppKit.NSVisualEffectView.alloc().init()
+    view.setMaterial_(AppKit.NSVisualEffectMaterialSidebar)
+    view.setBlendingMode_(AppKit.NSVisualEffectBlendingModeBehindWindow)
+    view.setState_(AppKit.NSVisualEffectStateFollowsWindowActiveState)
+    return view
 
 
 def _macos(window, dark):
     import objc
     import AppKit
 
-    global _BAND_VIEW
+    global _BAND_VIEW, _SIDEBAR_VIEW
 
     qt_view = objc.objc_object(c_void_p=int(window.winId()))
     nswin = qt_view.window()
@@ -139,20 +166,20 @@ def _macos(window, dark):
         pass
 
     if _BAND_VIEW is None:
-        band = AppKit.NSVisualEffectView.alloc().init()
-        band.setMaterial_(AppKit.NSVisualEffectMaterialSidebar)
-        band.setBlendingMode_(AppKit.NSVisualEffectBlendingModeBehindWindow)
-        band.setState_(AppKit.NSVisualEffectStateFollowsWindowActiveState)
-        _BAND_VIEW = band
-    try:
-        _BAND_VIEW.removeFromSuperview()
-    except Exception:
-        pass
-    theme.addSubview_positioned_relativeTo_(_BAND_VIEW, AppKit.NSWindowBelow,
-                                            qt_view)
+        _BAND_VIEW = _make_material_view(AppKit)
+    if _SIDEBAR_VIEW is None:
+        _SIDEBAR_VIEW = _make_material_view(AppKit)
+    for view in (_SIDEBAR_VIEW, _BAND_VIEW):
+        try:
+            view.removeFromSuperview()
+        except Exception:
+            pass
+        theme.addSubview_positioned_relativeTo_(view, AppKit.NSWindowBelow,
+                                                qt_view)
     _place_band(nswin, theme)
+    _place_sidebar(nswin, theme)
     _align_titlebar(nswin)
-    return '52 pt sidebar-blur band'
+    return '52 pt band + sidebar blur'
 
 
 def _place_band(nswin, theme):
@@ -166,6 +193,21 @@ def _place_band(nswin, theme):
     _BAND_VIEW.setHidden_(False)
     _BAND_VIEW.setFrame_(((0.0, bounds.size.height - BAND_HEIGHT),
                           (bounds.size.width, BAND_HEIGHT)))
+
+
+def _place_sidebar(nswin, theme):
+    """Frame the sidebar material as the left column. It spans the full
+    window height so it merges with the top band into one continuous
+    blur (Finder-style), and stays visible in full screen."""
+    if _SIDEBAR_VIEW is None:
+        return
+    bounds = theme.bounds()
+    if _SIDEBAR_WIDTH <= 0:
+        _SIDEBAR_VIEW.setHidden_(True)
+        return
+    _SIDEBAR_VIEW.setHidden_(False)
+    _SIDEBAR_VIEW.setFrame_(((0.0, 0.0),
+                             (_SIDEBAR_WIDTH, bounds.size.height)))
 
 
 def _align_titlebar(nswin):
