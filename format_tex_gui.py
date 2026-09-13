@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 r"""PySide6 GUI for format_tex.py: insert CJK/Latin spacing in TeX files
-with a file picker, directory scanning, rule toggles, per-file encoding
-auto-detection, and a colorized diff preview pane.
+with a file picker, directory scanning, drag & drop of files/folders,
+rule toggles, per-file encoding auto-detection, and a colorized diff
+preview pane.
 
 Native window materials: macOS Liquid Glass / vibrancy, Windows Mica
 (see platform_effects.py).
@@ -18,13 +19,14 @@ import sys
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, Qt
-from PySide6.QtGui import QColor, QFontDatabase, QPalette, QTextCharFormat, \
-    QTextCursor
-from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox,
-                               QFileDialog, QHBoxLayout, QLabel, QListWidget,
-                               QMainWindow, QMessageBox, QPlainTextEdit,
-                               QPushButton, QVBoxLayout, QWidget)
+from PySide6.QtCore import QEvent, QPointF, QUrl, Qt
+from PySide6.QtGui import QColor, QDropEvent, QFontDatabase, QPalette, \
+    QTextCharFormat, QTextCursor
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
+                               QComboBox, QFileDialog, QHBoxLayout, QLabel,
+                               QListWidget, QMainWindow, QMessageBox,
+                               QPlainTextEdit, QPushButton, QVBoxLayout,
+                               QWidget)
 
 from format_tex import FormatOptions, format_file, scan_directory
 from platform_effects import (apply_effects, last_material_view, notes,
@@ -53,6 +55,64 @@ def detect_dark(app):
                 < 128
         except Exception:
             return False
+
+
+class DropListWidget(QListWidget):
+    """File list that accepts dragged files and folders.
+
+    Only local-file URLs are accepted; non-local URLs (http:// etc.) are
+    ignored. The parent supplies a callback receiving the dropped local
+    paths."""
+
+    def __init__(self, on_paths, parent=None):
+        super().__init__(parent)
+        self._on_paths = on_paths
+        self.setAcceptDrops(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DropOnly)
+
+    def dragEnterEvent(self, event):
+        if self._has_local_files(event.mimeData()):
+            event.acceptProposedAction()
+            self.statusBarHint()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if self._has_local_files(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self.statusBarRestore()
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event):
+        self.statusBarRestore()
+        if not self._has_local_files(event.mimeData()):
+            event.ignore()
+            return
+        paths = [u.toLocalFile() for u in event.mimeData().urls()
+                 if u.isLocalFile() and u.toLocalFile()]
+        if paths:
+            event.acceptProposedAction()
+            self._on_paths(paths)
+
+    @staticmethod
+    def _has_local_files(mime):
+        return any(u.isLocalFile() for u in mime.urls())
+
+    def statusBarHint(self):
+        window = self.window()
+        if hasattr(window, 'statusBar'):
+            window.statusBar().showMessage('松开鼠标以添加文件/目录…')
+
+    def statusBarRestore(self):
+        window = self.window()
+        if hasattr(window, 'statusBar'):
+            window.statusBar().showMessage(
+                '就绪 (窗口效果: {})'.format(
+                    getattr(window, 'effect_note', 'system theme')))
 
 
 class MainWindow(QMainWindow):
@@ -97,7 +157,7 @@ class MainWindow(QMainWindow):
         top.addStretch(1)
         layout.addLayout(top)
 
-        self.file_list = QListWidget()
+        self.file_list = DropListWidget(self.drop_paths)
         layout.addWidget(self.file_list)
 
         options = QLabel('选项:')
@@ -239,6 +299,30 @@ class MainWindow(QMainWindow):
             lines.append('container has transparent gaps (glass '
                          'visible): {}'.format(container_transparent > 0))
             ok = ok and container_transparent > 0
+
+            # drag & drop: synthesize a drop of a folder (2 files) and a
+            # loose file, then assert the list gained them
+            import tempfile
+            from PySide6.QtCore import QMimeData
+            from PySide6.QtGui import QDrag
+            drop_dir = Path(tempfile.mkdtemp(prefix='fmt_gui_drop_'))
+            (drop_dir / 'drop1.tex').write_text('x\n', encoding='utf-8')
+            (drop_dir / 'drop2.ctx').write_text('y\n', encoding='utf-8')
+            loose = drop_dir / 'drop3.tex'
+            loose.write_text('z\n', encoding='utf-8')
+            before = self.file_list.count()
+            mime = QMimeData()
+            mime.setUrls([QUrl.fromLocalFile(str(drop_dir)),
+                          QUrl.fromLocalFile(str(loose))])
+            event = QDropEvent(QPointF(5, 5), Qt.DropAction.CopyAction,
+                               mime, Qt.MouseButton.LeftButton,
+                               Qt.KeyboardModifier.NoModifier)
+            self.file_list.dropEvent(event)
+            gained = self.file_list.count() - before
+            lines.append('drop added files: {} (folder scan + loose '
+                         'file)'.format(gained))
+            ok = ok and gained >= 2
+            shutil.rmtree(drop_dir, ignore_errors=True)
         except Exception as exc:
             lines.append('self-test exception: {}: {}'.format(
                 type(exc).__name__, exc))
@@ -296,6 +380,7 @@ class MainWindow(QMainWindow):
                 added += 1
         self.statusBar().showMessage('已选择 {} 个文件 (新增 {} 个)'.format(
             self.file_list.count(), added))
+        return added
 
     # ---------- actions ----------
 
@@ -322,6 +407,36 @@ class MainWindow(QMainWindow):
             self.show_error(traceback.format_exc())
             return
         self._add_paths([str(p) for p in matches])
+
+    def drop_paths(self, paths):
+        """Handle paths dropped onto the file list: loose files are
+        added as-is; folders are scanned with the current scan
+        settings (extension + recursion checkbox)."""
+        try:
+            ext = self.ext_edit.currentText().strip() or '.tex'
+            recursive = self.chk_recursive.isChecked()
+            collected = []
+            n_dirs = n_files = 0
+            seen = set()
+            for p in paths:
+                path = Path(p)
+                if path.is_dir():
+                    n_dirs += 1
+                    for m in scan_directory(path, ext, recursive):
+                        if str(m) not in seen:
+                            seen.add(str(m))
+                            collected.append(str(m))
+                elif path.is_file():
+                    n_files += 1
+                    if str(path) not in seen:
+                        seen.add(str(path))
+                        collected.append(str(path))
+            added = self._add_paths(collected)
+            self.statusBar().showMessage(
+                '拖入 {} 个文件、{} 个目录: 新增 {} 个文件 (共 {} 个)'.format(
+                    n_files, n_dirs, added, self.file_list.count()))
+        except Exception:
+            self.show_error(traceback.format_exc())
 
     def clear_files(self):
         self.file_list.clear()
