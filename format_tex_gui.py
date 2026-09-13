@@ -18,7 +18,7 @@ import sys
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QColor, QFontDatabase, QPalette, QTextCharFormat, \
     QTextCursor
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox,
@@ -27,7 +27,8 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox,
                                QPushButton, QVBoxLayout, QWidget)
 
 from format_tex import FormatOptions, format_file, scan_directory
-from platform_effects import apply_effects, notes
+from platform_effects import (apply_effects, last_material_view, notes,
+                              prepare_qt)
 
 ENCODINGS = ['同输入', 'utf-8', 'gb18030', 'gbk', 'gb2312', 'big5',
              'utf-16', 'latin-1']
@@ -159,11 +160,69 @@ class MainWindow(QMainWindow):
             setattr(self, 'fmt_' + tag, fmt)
         layout.addWidget(self.output, 1)
 
-        self.effect_note = apply_effects(self, self.dark)
-        for msg in notes():
-            self.show_error(msg + '\n')
+        self.effect_note = None
+        self._effects_applied = False
+        self._notes_seen = 0
+        prepare_qt(self)
 
     # ---------- helpers ----------
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.apply_window_effects()
+
+    def event(self, ev):
+        if ev.type() == QEvent.Type.WinIdChange and self._effects_applied:
+            self.apply_window_effects()
+        return super().event(ev)
+
+    def apply_window_effects(self):
+        self.effect_note = apply_effects(self, self.dark)
+        self._effects_applied = True
+        new_notes = notes()[self._notes_seen:]
+        self._notes_seen = len(notes())
+        for msg in new_notes:
+            self.show_error(msg + '\n')
+        self.statusBar().showMessage(
+            '就绪 (窗口效果: {})'.format(self.effect_note))
+
+    def self_test(self):
+        """Assert the native window is visible and the material view sits
+        below the Qt view; writes format_tex_gui_selftest.txt and returns
+        True/False (for the --self-test exit code)."""
+        import objc
+        import AppKit
+        lines = []
+        ok = True
+        try:
+            qt_view = objc.objc_object(c_void_p=int(self.winId()))
+            nswin = qt_view.window()
+            visible = bool(nswin.isVisible())
+            lines.append('window visible: {}'.format(visible))
+            ok = ok and visible
+            theme = qt_view.superview()
+            subs = list(theme.subviews())
+            idx_qt = next((i for i, s in enumerate(subs) if s is qt_view),
+                          None)
+            material = last_material_view()
+            below = (material is not None and material in subs
+                     and idx_qt is not None and subs.index(material) < idx_qt)
+            lines.append('material below Qt view: {}'.format(below))
+            ok = ok and below
+            lines.append('contentView is Qt view: {}'.format(
+                nswin.contentView() is qt_view))
+            lines.append('effect: {}'.format(self.effect_note))
+        except Exception as exc:
+            lines.append('self-test exception: {}: {}'.format(
+                type(exc).__name__, exc))
+            ok = False
+        result = 'PASS' if ok else 'FAIL'
+        try:
+            Path('format_tex_gui_selftest.txt').write_text(
+                result + '\n' + '\n'.join(lines) + '\n', encoding='utf-8')
+        except Exception:
+            pass
+        return ok
 
     def log_path(self):
         cwd = Path.cwd()
@@ -345,6 +404,7 @@ class MainWindow(QMainWindow):
 
 
 def main():
+    selftest = '--self-test' in sys.argv
     app = QApplication(sys.argv)
     app.setApplicationName('TeX 中英文混排格式化工具')
     if sys.platform.startswith('linux') and detect_dark(app):
@@ -355,6 +415,11 @@ def main():
     window.statusBar().showMessage(
         '就绪 (窗口效果: {})'.format(window.effect_note))
     window.show()
+    if selftest:
+        app.processEvents()
+        ok = window.self_test()
+        window.close()
+        return 0 if ok else 1
     return app.exec()
 
 

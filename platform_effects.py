@@ -5,16 +5,23 @@ macOS 26+   NSGlassEffectView (Liquid Glass), NSVisualEffectView below 26
 Windows 11  DWM Mica (with legacy-attribute and solid fallbacks)
 Linux       system Qt platform theme (no override)
 
+IMPORTANT: Qt renders the whole widget tree into a single top-level
+NSView and its show() path only orders the window on screen while that
+view is the window's contentView. Never reparent or re-wrap Qt's view -
+insert the material as a SIBLING in the window's theme frame instead.
+
 Usage
 -----
-    from platform_effects import apply_effects, notes
-    applied = apply_effects(window, dark=...)
+    from platform_effects import prepare_qt, apply_effects, notes
+    prepare_qt(window)                    # before show(): translucency
+    applied = apply_effects(window, dark=...)   # after show()
     notes()  -> list of fallback/failure messages for logging
 """
 
 import sys
 
 _NOTES = []
+_LAST_VIEW = None
 
 
 def _note(msg):
@@ -25,10 +32,24 @@ def notes():
     return list(_NOTES)
 
 
+def last_material_view():
+    """The material view inserted by the last apply_effects call (or
+    None), so callers/tests can verify its placement."""
+    return _LAST_VIEW
+
+
+def prepare_qt(window):
+    """Set Qt attributes that must precede the native window being
+    shown (safe to call from __init__)."""
+    from PySide6.QtCore import Qt
+    window.setAttribute(Qt.WA_TranslucentBackground, True)
+
+
 def apply_effects(window, dark=False):
-    """Apply the best native window material for the current OS and
-    return a short description (for logging). Failures degrade to the
-    system theme instead of raising."""
+    """Insert the best native window material for the current OS.
+    Must be called AFTER the window is shown. Returns a short
+    description (for logging); failures degrade to the system theme
+    instead of raising."""
     try:
         if sys.platform == 'darwin':
             return _macos(window, dark)
@@ -41,14 +62,12 @@ def apply_effects(window, dark=False):
 
 
 def _macos(window, dark):
-    from PySide6.QtCore import Qt
-    window.setAttribute(Qt.WA_TranslucentBackground, True)
-
+    global _LAST_VIEW
     import objc
     import AppKit
 
-    content = objc.objc_object(c_void_p=int(window.winId()))
-    nswin = content.window()
+    qt_view = objc.objc_object(c_void_p=int(window.winId()))
+    nswin = qt_view.window()
     try:
         nswin.setTitlebarAppearsTransparent_(True)
     except Exception as exc:
@@ -71,38 +90,22 @@ def _macos(window, dark):
         effect.setState_(AppKit.NSVisualEffectStateFollowsWindowActiveState)
         applied = 'vibrancy'
 
-    # A subview always composites ABOVE its superview's own drawing, and
-    # Qt renders the whole widget tree into the top-level NSView - so the
-    # material must become a SIBLING behind Qt's view, not a child of it.
-    # Wrap: container becomes the window's contentView; the material view
-    # is added first (back layer), then Qt's view on top.
-    old = nswin.contentView()
-    container = AppKit.NSView.alloc().initWithFrame_(old.frame())
-    container.setAutoresizingMask_(AppKit.NSViewWidthSizable
-                                   | AppKit.NSViewHeightSizable)
-    nswin.setContentView_(container)
-    try:
-        effect.setFrame_(container.bounds())
-        effect.setAutoresizingMask_(AppKit.NSViewWidthSizable
-                                     | AppKit.NSViewHeightSizable)
-        container.addSubview_(effect)
-        old.setFrame_(container.bounds())
-        old.setAutoresizingMask_(AppKit.NSViewWidthSizable
-                                  | AppKit.NSViewHeightSizable)
-        container.addSubview_(old)
-    except Exception:
+    theme = qt_view.superview()
+    if _LAST_VIEW is not None:       # idempotent re-apply (WinIdChange)
         try:
-            nswin.setContentView_(old)
+            _LAST_VIEW.removeFromSuperview()
         except Exception:
             pass
-        raise
+    effect.setFrame_(theme.bounds())
+    effect.setAutoresizingMask_(AppKit.NSViewWidthSizable
+                                 | AppKit.NSViewHeightSizable)
+    theme.addSubview_positioned_relativeTo_(effect, AppKit.NSWindowBelow,
+                                            qt_view)
+    _LAST_VIEW = effect
     return applied
 
 
 def _windows(window, dark):
-    from PySide6.QtCore import Qt
-    window.setAttribute(Qt.WA_TranslucentBackground, True)
-
     import ctypes
 
     hwnd = int(window.winId())

@@ -50,6 +50,13 @@ jobs:
           printf '\xe4\xb8\xad\xe6\x96\x87English\xe4\xb8\xad\xe6\x96\x87\n' > smoke.tex
           ./dist/format-tex-${{ matrix.suffix }}${{ matrix.ext }} --no-backup smoke.tex
           grep -q $'\xe4\xb8\xad\xe6\x96\x87 English \xe4\xb8\xad\xe6\x96\x87' smoke.tex
+      - name: GUI self-test (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mkdir -p /tmp/guiselftest && cd /tmp/guiselftest
+          "$GITHUB_WORKSPACE/dist/format-tex-gui-macos-arm64" --self-test
+          grep -q '^PASS' format_tex_gui_selftest.txt
       - uses: actions/upload-artifact@v4
         with:
           name: format-tex-${{ matrix.suffix }}
