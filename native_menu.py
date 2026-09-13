@@ -46,42 +46,68 @@ def _target_class():
     return _TARGET_CLASS
 
 
+def build_menu(items, current, on_select, custom_label=None, min_width=None):
+    """Build (but do not show) the NSMenu for ``items``.
+
+    Returns ``(menu, target, selected_item)``: the menu carries a
+    checkmark on the current value, an optional custom entry last, and a
+    minimum width (so the popup is never narrower than the control);
+    ``selected_item`` is the item matching ``current`` (or None), used to
+    anchor the popup the way a native popup button does."""
+    from AppKit import (NSControlStateValueOff, NSControlStateValueOn,
+                        NSMenu, NSMenuItem)
+
+    target = _target_class().alloc().init()
+    target.callback = on_select
+
+    menu = NSMenu.alloc().init()
+    menu.setAutoenablesItems_(False)
+    selected = None
+    for title, checked, payload in menu_entries(items, current,
+                                                custom_label):
+        item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            title, b'select:', '')
+        item.setTarget_(target)
+        item.setRepresentedObject_(payload)
+        item.setEnabled_(True)
+        item.setState_(NSControlStateValueOn if checked
+                       else NSControlStateValueOff)
+        menu.addItem_(item)
+        if checked:
+            selected = item
+    if min_width:
+        try:
+            menu.setMinimumWidth_(float(min_width))
+        except Exception:
+            pass
+    return menu, target, selected
+
+
 def popup_native_menu(widget, items, current, on_select, custom_label=None):
     """Show a native NSMenu anchored at ``widget``. Returns True when the
     menu was shown (macOS only), False to let the caller fall back to
     Qt's own popup. ``on_select`` receives the chosen title (or
-    :data:`CUSTOM_SENTINEL`)."""
+    :data:`CUSTOM_SENTINEL`).
+
+    The menu is at least as wide as the control (growing if a title is
+    wider - native behaviour) and the selected item is anchored over the
+    control, so the highlighted row coincides with the button."""
     if sys.platform != 'darwin':
         return False
     try:
         import objc
-        from AppKit import (NSControlStateValueOff, NSControlStateValueOn,
-                            NSMenu, NSMenuItem)
         from PySide6.QtCore import QPoint
 
-        entries = menu_entries(items, current, custom_label)
-
-        target = _target_class().alloc().init()
-        target.callback = on_select
-
-        menu = NSMenu.alloc().init()
-        menu.setAutoenablesItems_(False)
-        for title, checked, payload in entries:
-            item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-                title, b'select:', '')
-            item.setTarget_(target)
-            item.setRepresentedObject_(payload)
-            item.setEnabled_(True)
-            item.setState_(NSControlStateValueOn if checked
-                           else NSControlStateValueOff)
-            menu.addItem_(item)
+        menu, target, selected = build_menu(
+            items, current, on_select, custom_label,
+            min_width=widget.width())
 
         view = objc.objc_object(c_void_p=int(widget.window().winId()))
         pos = widget.mapTo(widget.window(), QPoint(0, 0))
         height = view.bounds().size.height
         y = float(pos.y()) if view.isFlipped() else height - float(pos.y())
         menu.popUpMenuPositioningItem_atLocation_inView_(
-            None, (float(pos.x()), y), view)
+            selected, (float(pos.x()), y), view)
         del target          # keep alive while the menu tracks, then drop
         return True
     except Exception:

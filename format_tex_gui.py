@@ -29,7 +29,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
                                QPushButton, QVBoxLayout, QWidget)
 
 from format_tex import FormatOptions, format_file, scan_directory
-from native_menu import CUSTOM_SENTINEL, menu_entries, popup_native_menu
+from native_menu import (CUSTOM_SENTINEL, build_menu, menu_entries,
+                         popup_native_menu)
 from platform_effects import (apply_effects, band_height,
                               last_material_view, lights_inset, notes,
                               prepare_qt, reposition_materials, title_gap)
@@ -201,9 +202,11 @@ class NativeMenuCombo(QComboBox):
 
     Non-editable so it looks like a native popup button (bezel with an
     up-down chevron); arbitrary values are entered through the
-    "自定义…" menu entry."""
+    "其它" menu entry. The label stays short enough (including the
+    checkmark column AppKit reserves) that the popup is exactly as wide
+    as the button."""
 
-    CUSTOM_LABEL = '自定义…'
+    CUSTOM_LABEL = '其它'
 
     def __init__(self, items, current, parent=None):
         super().__init__(parent)
@@ -227,7 +230,7 @@ class NativeMenuCombo(QComboBox):
         self.setCurrentText(value)
 
     def _ask_custom(self):
-        text, ok = QInputDialog.getText(self, '自定义', '输入值:',
+        text, ok = QInputDialog.getText(self, '自定义值', '输入值:',
                                         text=self.currentText())
         text = text.strip()
         if ok and text:
@@ -553,6 +556,23 @@ class MainWindow(QMainWindow):
             lines.append('both dropdowns are native popup buttons: '
                          '{}'.format(combos_ok))
             ok = ok and combos_ok
+
+            # the popup must never be narrower than its button, and (with
+            # the shipped presets) no wider either, so the highlighted row
+            # coincides with the button
+            width_ok = True
+            for combo in (self.ext_edit, self.enc_out):
+                combo_items = [combo.itemText(i)
+                               for i in range(combo.count())]
+                menu, _target, _sel = build_menu(
+                    combo_items, combo.currentText(), lambda _v: None,
+                    NativeMenuCombo.CUSTOM_LABEL, min_width=combo.width())
+                width_ok = width_ok and (
+                    abs(menu.minimumWidth() - combo.width()) < 1
+                    and abs(menu.size().width - combo.width()) < 1)
+            lines.append('popup width equals the button width: '
+                         '{}'.format(width_ok))
+            ok = ok and width_ok
 
             # drag & drop: synthesize a drop of a folder (2 files) and a
             # loose file, then assert the list gained them
