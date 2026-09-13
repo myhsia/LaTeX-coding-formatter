@@ -31,8 +31,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
 from format_tex import FormatOptions, format_file, scan_directory
 from native_menu import CUSTOM_SENTINEL, menu_entries, popup_native_menu
 from platform_effects import (apply_effects, band_height,
-                              last_material_view, notes, prepare_qt,
-                              reposition_materials)
+                              last_material_view, lights_inset, notes,
+                              prepare_qt, reposition_materials)
 
 ENCODINGS = ['同输入', 'utf-8', 'gb18030', 'gbk', 'gb2312', 'big5',
              'utf-16', 'latin-1']
@@ -428,15 +428,24 @@ class MainWindow(QMainWindow):
             def chrome_offset():
                 """Distance of the traffic-light centre from the window
                 top, in screen coordinates."""
-                close = nswin.standardWindowButton_(
-                    AppKit.NSWindowCloseButton)
-                rect = close.convertRect_toView_(close.bounds(), None)
-                rect = nswin.convertRectToScreen_(rect)
-                frame = nswin.frame()
-                return ((frame.origin.y + frame.size.height)
-                        - (rect.origin.y + rect.size.height / 2))
+                return (nswin.frame().origin.y + nswin.frame().size.height
+                        - (screen_rect(close_button()).origin.y
+                           + screen_rect(close_button()).size.height / 2))
 
-            # the app re-applies the centring after AppKit's post-show
+            def close_button():
+                return nswin.standardWindowButton_(
+                    AppKit.NSWindowCloseButton)
+
+            def screen_rect(view):
+                rect = view.convertRect_toView_(view.bounds(), None)
+                return nswin.convertRectToScreen_(rect)
+
+            def lights_offset():
+                """Left gap between the window edge and the close button."""
+                return screen_rect(close_button()).origin.x \
+                    - nswin.frame().origin.x
+
+            # the app re-applies the alignment after AppKit's post-show
             # layout (deferred timers); mirror that here
             QApplication.processEvents()
             reposition_materials(self)
@@ -445,6 +454,11 @@ class MainWindow(QMainWindow):
                          '{}'.format(chrome_offset(), band_height() / 2,
                                      centred))
             ok = ok and centred
+            inset_ok = abs(lights_offset() - lights_inset()) < 2
+            lines.append('traffic lights left inset {:.0f} pt (native '
+                         '{:.0f}): {}'.format(lights_offset(), lights_inset(),
+                                              inset_ok))
+            ok = ok and inset_ok
             lines.append('title visible: {}'.format(
                 nswin.titleVisibility() == AppKit.NSWindowTitleVisible))
             lines.append('contentView is Qt view: {}'.format(
@@ -490,13 +504,15 @@ class MainWindow(QMainWindow):
                 QFrame, 'hairline') is not None
 
             # AppKit resets the chrome on resize - re-application must
-            # restore the centring
+            # restore both the centring and the inset
             self.resize(self.width() + 40, self.height() + 30)
             QApplication.processEvents()
             recentred = abs(chrome_offset() - band_height() / 2) < 2
-            lines.append('lights still centred after resize: {}'.format(
-                recentred))
-            ok = ok and recentred
+            reinset = abs(lights_offset() - lights_inset()) < 2
+            lines.append('after resize: centred {}, inset {} (offset '
+                         '{:.0f} pt)'.format(recentred, reinset,
+                                             lights_offset()))
+            ok = ok and recentred and reinset
 
             # native dropdown menu model: preset order, single checkmark
             # on the current value, custom entry last

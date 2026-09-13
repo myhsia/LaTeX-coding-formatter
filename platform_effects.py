@@ -23,12 +23,13 @@ Usage
     notes()  -> list of fallback/failure messages for logging
 """
 
+import os
 import sys
 
 _NOTES = []
 
 BAND_HEIGHT = 52.0
-
+LIGHTS_INSET = 19.0      # native unified-toolbar inset (Finder/Notes)
 _BAND_VIEW = None
 
 
@@ -44,6 +45,17 @@ def band_height():
     """Height of the top band the GUI must leave transparent (0 when the
     platform does not use one)."""
     return BAND_HEIGHT if sys.platform == 'darwin' else 0.0
+
+
+def lights_inset():
+    """Left gap between the window edge and the traffic lights. Defaults
+    to the native unified-toolbar inset (19 pt); override for fine-tuning
+    with the FORMAT_TEX_LIGHTS_INSET environment variable."""
+    try:
+        return float(os.environ.get('FORMAT_TEX_LIGHTS_INSET',
+                                    LIGHTS_INSET))
+    except (TypeError, ValueError):
+        return LIGHTS_INSET
 
 
 def last_material_view():
@@ -84,7 +96,7 @@ def reposition_materials(window):
         qt_view = objc.objc_object(c_void_p=int(window.winId()))
         nswin = qt_view.window()
         _place_band(nswin, qt_view.superview())
-        _centre_titlebar(nswin)
+        _align_titlebar(nswin)
     except Exception as exc:
         _note('reposition failed: {}: {}'.format(type(exc).__name__, exc))
 
@@ -129,7 +141,7 @@ def _macos(window, dark):
     theme.addSubview_positioned_relativeTo_(_BAND_VIEW, AppKit.NSWindowBelow,
                                             qt_view)
     _place_band(nswin, theme)
-    _centre_titlebar(nswin)
+    _align_titlebar(nswin)
     return '52 pt sidebar-blur band'
 
 
@@ -146,31 +158,49 @@ def _place_band(nswin, theme):
                           (bounds.size.width, BAND_HEIGHT)))
 
 
-def _centre_titlebar(nswin):
-    """Move the native titlebar container (traffic lights + title) so
-    its centre lands in the middle of the band.
+def _align_titlebar(nswin):
+    """Centre the native titlebar container (traffic lights + title) in
+    the band and give the traffic lights the native left inset.
 
-    AppKit resets the container on layout, so instead of storing a
-    baseline we correct from the measured offset - the container moves
-    the chrome 1:1, so one step is exact and re-running is a no-op."""
+    AppKit resets the chrome on layout, so instead of storing a baseline
+    we correct from the measured offsets - both corrections move the
+    chrome 1:1, so one step is exact and re-running is a no-op."""
     import AppKit
 
     close = nswin.standardWindowButton_(AppKit.NSWindowCloseButton)
     if close is None:
         return
-    box = close.superview()
-    rect = close.convertRect_toView_(close.bounds(), None)
-    rect = nswin.convertRectToScreen_(rect)
     frame = nswin.frame()
-    current = ((frame.origin.y + frame.size.height)
-               - (rect.origin.y + rect.size.height / 2))
-    delta = current - BAND_HEIGHT / 2.0        # >0: chrome is too low
-    if abs(delta) < 0.5:
-        return
-    bf = box.frame()
-    flipped = bool(box.superview().isFlipped())
-    box.setFrameOrigin_((bf.origin.x,
-                         bf.origin.y + (-delta if flipped else delta)))
+    top = frame.origin.y + frame.size.height
+    left = frame.origin.x
+
+    def screen_rect(view):
+        rect = view.convertRect_toView_(view.bounds(), None)
+        return nswin.convertRectToScreen_(rect)
+
+    # vertical: centre the container in the band
+    rect = screen_rect(close)
+    current = top - (rect.origin.y + rect.size.height / 2)
+    delta_y = current - BAND_HEIGHT / 2.0
+    if abs(delta_y) >= 0.5:
+        box = close.superview()
+        bf = box.frame()
+        flipped = bool(box.superview().isFlipped())
+        box.setFrameOrigin_((bf.origin.x,
+                             bf.origin.y + (-delta_y if flipped else delta_y)))
+
+    # horizontal: inset the three buttons natively
+    rect = screen_rect(close)
+    delta_x = lights_inset() - (rect.origin.x - left)
+    if abs(delta_x) >= 0.5:
+        for kind in (AppKit.NSWindowCloseButton,
+                     AppKit.NSWindowMiniaturizeButton,
+                     AppKit.NSWindowZoomButton):
+            button = nswin.standardWindowButton_(kind)
+            if button is None:
+                continue
+            bf = button.frame()
+            button.setFrameOrigin_((bf.origin.x + delta_x, bf.origin.y))
 
 
 def _windows(window, dark):
