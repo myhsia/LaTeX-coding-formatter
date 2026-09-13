@@ -30,6 +30,7 @@ _NOTES = []
 
 BAND_HEIGHT = 52.0
 LIGHTS_INSET = 19.0      # native unified-toolbar inset (Finder/Notes)
+TITLE_GAP = 8.0          # gap between the traffic lights and the title
 _BAND_VIEW = None
 
 
@@ -56,6 +57,15 @@ def lights_inset():
                                     LIGHTS_INSET))
     except (TypeError, ValueError):
         return LIGHTS_INSET
+
+
+def title_gap():
+    """Gap between the traffic lights and the left-aligned window title
+    (default 8 pt); override with FORMAT_TEX_TITLE_GAP."""
+    try:
+        return float(os.environ.get('FORMAT_TEX_TITLE_GAP', TITLE_GAP))
+    except (TypeError, ValueError):
+        return TITLE_GAP
 
 
 def last_material_view():
@@ -159,11 +169,12 @@ def _place_band(nswin, theme):
 
 
 def _align_titlebar(nswin):
-    """Centre the native titlebar container (traffic lights + title) in
-    the band and give the traffic lights the native left inset.
+    """Centre the native titlebar container in the band, give the traffic
+    lights the native left inset and left-align the window title just
+    after them.
 
     AppKit resets the chrome on layout, so instead of storing a baseline
-    we correct from the measured offsets - both corrections move the
+    we correct from the measured offsets - each correction moves the
     chrome 1:1, so one step is exact and re-running is a no-op."""
     import AppKit
 
@@ -201,6 +212,18 @@ def _align_titlebar(nswin):
                 continue
             bf = button.frame()
             button.setFrameOrigin_((bf.origin.x + delta_x, bf.origin.y))
+
+    # title: left-align it just after the traffic lights
+    title = nswin.toolbarTitlebarTitleTextField()
+    zoom = nswin.standardWindowButton_(AppKit.NSWindowZoomButton)
+    if title is None or zoom is None:
+        return
+    zoom_rect = screen_rect(zoom)
+    target = zoom_rect.origin.x + zoom_rect.size.width + title_gap()
+    delta = target - screen_rect(title).origin.x
+    if abs(delta) >= 0.5:
+        tf = title.frame()
+        title.setFrameOrigin_((tf.origin.x + delta, tf.origin.y))
 
 
 def _windows(window, dark):

@@ -32,7 +32,7 @@ from format_tex import FormatOptions, format_file, scan_directory
 from native_menu import CUSTOM_SENTINEL, menu_entries, popup_native_menu
 from platform_effects import (apply_effects, band_height,
                               last_material_view, lights_inset, notes,
-                              prepare_qt, reposition_materials)
+                              prepare_qt, reposition_materials, title_gap)
 
 ENCODINGS = ['同输入', 'utf-8', 'gb18030', 'gbk', 'gb2312', 'big5',
              'utf-16', 'latin-1']
@@ -459,6 +459,25 @@ class MainWindow(QMainWindow):
                          '{:.0f}): {}'.format(lights_offset(), lights_inset(),
                                               inset_ok))
             ok = ok and inset_ok
+
+            def title_left():
+                tf = nswin.toolbarTitlebarTitleTextField()
+                if tf is None:
+                    return None
+                return screen_rect(tf).origin.x - nswin.frame().origin.x
+
+            def zoom_right():
+                z = nswin.standardWindowButton_(AppKit.NSWindowZoomButton)
+                r = screen_rect(z)
+                return (r.origin.x + r.size.width) - nswin.frame().origin.x
+
+            gap_ok = (title_left() is not None
+                      and abs((title_left() - zoom_right()) - title_gap()) < 2)
+            lines.append('title left-aligned after the lights (gap {:.0f} pt '
+                         'vs {:.0f}): {}'.format(
+                             (title_left() or 0) - zoom_right(), title_gap(),
+                             gap_ok))
+            ok = ok and gap_ok
             lines.append('title visible: {}'.format(
                 nswin.titleVisibility() == AppKit.NSWindowTitleVisible))
             lines.append('contentView is Qt view: {}'.format(
@@ -509,10 +528,11 @@ class MainWindow(QMainWindow):
             QApplication.processEvents()
             recentred = abs(chrome_offset() - band_height() / 2) < 2
             reinset = abs(lights_offset() - lights_inset()) < 2
-            lines.append('after resize: centred {}, inset {} (offset '
-                         '{:.0f} pt)'.format(recentred, reinset,
-                                             lights_offset()))
-            ok = ok and recentred and reinset
+            regap = (title_left() is not None
+                     and abs((title_left() - zoom_right()) - title_gap()) < 2)
+            lines.append('after resize: centred {}, inset {}, title gap '
+                         '{}'.format(recentred, reinset, regap))
+            ok = ok and recentred and reinset and regap
 
             # native dropdown menu model: preset order, single checkmark
             # on the current value, custom entry last
