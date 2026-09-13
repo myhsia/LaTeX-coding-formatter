@@ -24,11 +24,12 @@ from PySide6.QtGui import QColor, QDropEvent, QFont, QFontDatabase, \
     QPalette, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
                                QComboBox, QFileDialog, QFrame, QHBoxLayout,
-                               QLabel, QListWidget, QMainWindow, QMessageBox,
-                               QPlainTextEdit, QPushButton, QVBoxLayout,
-                               QWidget)
+                               QInputDialog, QLabel, QListWidget,
+                               QMainWindow, QMessageBox, QPlainTextEdit,
+                               QPushButton, QVBoxLayout, QWidget)
 
 from format_tex import FormatOptions, format_file, scan_directory
+from native_menu import CUSTOM_SENTINEL, menu_entries, popup_native_menu
 from platform_effects import (apply_effects, band_height,
                               last_material_view, notes, prepare_qt,
                               reposition_materials)
@@ -194,6 +195,47 @@ class DropListWidget(QListWidget):
                     getattr(window, 'effect_note', 'system theme')))
 
 
+class NativeMenuCombo(QComboBox):
+    """Popup button whose dropdown is a native NSMenu on macOS (system
+    material, checkmark on the current item); Qt's popup elsewhere.
+
+    Non-editable so it looks like a native popup button (bezel with an
+    up-down chevron); arbitrary values are entered through the
+    "自定义…" menu entry."""
+
+    CUSTOM_LABEL = '自定义…'
+
+    def __init__(self, items, current, parent=None):
+        super().__init__(parent)
+        self.setEditable(False)
+        self.addItems(items)
+        self.setCurrentText(current)
+
+    def showPopup(self):
+        items = [self.itemText(i) for i in range(self.count())]
+        if popup_native_menu(self, items, self.currentText(), self._choose,
+                             self.CUSTOM_LABEL):
+            return
+        super().showPopup()
+
+    def _choose(self, value):
+        if value == CUSTOM_SENTINEL:
+            # runs inside NSMenu tracking - defer the Qt dialog until the
+            # menu has closed
+            QTimer.singleShot(0, self._ask_custom)
+            return
+        self.setCurrentText(value)
+
+    def _ask_custom(self):
+        text, ok = QInputDialog.getText(self, '自定义', '输入值:',
+                                        text=self.currentText())
+        text = text.strip()
+        if ok and text:
+            if self.findText(text) < 0:
+                self.addItem(text)
+            self.setCurrentText(text)
+
+
 class MainWindow(QMainWindow):
 
     def __init__(self):
@@ -233,10 +275,7 @@ class MainWindow(QMainWindow):
 
         top = QHBoxLayout()
         top.addWidget(QLabel('扩展名'))
-        self.ext_edit = QComboBox()
-        self.ext_edit.setEditable(True)
-        self.ext_edit.addItems(EXTENSIONS)
-        self.ext_edit.setEditText('.tex')
+        self.ext_edit = NativeMenuCombo(EXTENSIONS, '.tex')
         top.addWidget(self.ext_edit)
         self.chk_recursive = QCheckBox('含子目录')
         top.addWidget(self.chk_recursive)
@@ -278,10 +317,7 @@ class MainWindow(QMainWindow):
 
         enc = QHBoxLayout()
         enc.addWidget(QLabel('输出编码'))
-        self.enc_out = QComboBox()
-        self.enc_out.setEditable(True)
-        self.enc_out.addItems(ENCODINGS)
-        self.enc_out.setCurrentText('同输入')
+        self.enc_out = NativeMenuCombo(ENCODINGS, '同输入')
         enc.addWidget(self.enc_out)
         enc.addWidget(QLabel('(输入编码自动检测; 输出默认同输入编码, '
                              '也可输入任意编码名)'))
@@ -461,6 +497,26 @@ class MainWindow(QMainWindow):
             lines.append('lights still centred after resize: {}'.format(
                 recentred))
             ok = ok and recentred
+
+            # native dropdown menu model: preset order, single checkmark
+            # on the current value, custom entry last
+            entries = menu_entries(['a', 'b', 'c'], 'b',
+                                   NativeMenuCombo.CUSTOM_LABEL)
+            model_ok = (
+                [e[0] for e in entries]
+                == ['a', 'b', 'c', NativeMenuCombo.CUSTOM_LABEL]
+                and [e[1] for e in entries] == [False, True, False, False]
+                and entries[-1][2] == CUSTOM_SENTINEL)
+            lines.append('dropdown menu model (order/check/custom): '
+                         '{}'.format(model_ok))
+            ok = ok and model_ok
+            combos_ok = (isinstance(self.ext_edit, NativeMenuCombo)
+                         and isinstance(self.enc_out, NativeMenuCombo)
+                         and not self.ext_edit.isEditable()
+                         and not self.enc_out.isEditable())
+            lines.append('both dropdowns are native popup buttons: '
+                         '{}'.format(combos_ok))
+            ok = ok and combos_ok
 
             # drag & drop: synthesize a drop of a folder (2 files) and a
             # loose file, then assert the list gained them
