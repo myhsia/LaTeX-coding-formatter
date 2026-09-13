@@ -62,7 +62,7 @@ class App:
     def __init__(self, root):
         self.root = root
         root.report_callback_exception = self.report_callback_exception
-        root.title('TeX 中英文混排格式化工具')
+        root.title('LaTeX Coding Style Formatter')
         root.geometry('940x680')
         root.minsize(720, 520)
 

@@ -59,7 +59,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('TeX 中英文混排格式化工具')
+        self.setWindowTitle('LaTeX Coding Style Formatter')
         self.resize(980, 700)
         self.setMinimumSize(760, 560)
 
@@ -433,7 +433,7 @@ class MainWindow(QMainWindow):
 def main():
     selftest = '--self-test' in sys.argv
     app = QApplication(sys.argv)
-    app.setApplicationName('TeX 中英文混排格式化工具')
+    app.setApplicationName('LaTeX Coding Style Formatter')
     if sys.platform.startswith('linux') and detect_dark(app):
         app.setStyle('Fusion')
     window = MainWindow()

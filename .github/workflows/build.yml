@@ -44,6 +44,13 @@ jobs:
         run: |
           mv "dist/format-tex-gui${{ matrix.ext }}" "dist/format-tex-gui-${{ matrix.suffix }}${{ matrix.ext }}"
           mv "dist/format-tex${{ matrix.ext }}" "dist/format-tex-${{ matrix.suffix }}${{ matrix.ext }}"
+      - name: Patch macOS SDK claim (opt into Liquid Glass appearance)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          chmod +x macos_patch_sdk.sh
+          ./macos_patch_sdk.sh dist
+          vtool -show-build dist/format-tex-gui-macos-arm64 | grep 'sdk 26.0'
       - name: Smoke test CLI
         shell: bash
         run: |
