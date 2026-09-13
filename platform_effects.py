@@ -61,6 +61,39 @@ def apply_effects(window, dark=False):
         return 'system theme (fallback)'
 
 
+def titlebar_height(nswin):
+    """Height of the title bar strip in points (0 when absent)."""
+    try:
+        frame = nswin.frame()
+        content = nswin.contentRectForFrameRect_(frame)
+        return max(0.0, frame.size.height - content.size.height)
+    except Exception:
+        return 0.0
+
+
+def reposition_material(window):
+    """Re-fit the material view to the current title bar strip (call on
+    window resize); hides it when there is no title bar (full screen)."""
+    view = _LAST_VIEW
+    if view is None:
+        return
+    try:
+        import objc
+        qt_view = objc.objc_object(c_void_p=int(window.winId()))
+        nswin = qt_view.window()
+        theme = qt_view.superview()
+        height = titlebar_height(nswin)
+        width = theme.bounds().size.width
+        total = theme.bounds().size.height
+        if height <= 0:
+            view.setHidden_(True)
+            return
+        view.setHidden_(False)
+        view.setFrame_(((0.0, total - height), (width, height)))
+    except Exception as exc:
+        _note('reposition failed: {}: {}'.format(type(exc).__name__, exc))
+
+
 def _macos(window, dark):
     global _LAST_VIEW
     import objc
@@ -72,6 +105,12 @@ def _macos(window, dark):
         nswin.setTitlebarAppearsTransparent_(True)
     except Exception as exc:
         _note('titlebar transparency failed: {}'.format(exc))
+
+    try:
+        nswin.setTitlebarSeparatorStyle_(
+            AppKit.NSTitlebarSeparatorStyleLine)
+    except Exception as exc:
+        _note('titlebar separator unavailable: {}'.format(exc))
 
     try:
         glass = objc.lookUpClass('NSGlassEffectView')
@@ -96,9 +135,14 @@ def _macos(window, dark):
             _LAST_VIEW.removeFromSuperview()
         except Exception:
             pass
-    effect.setFrame_(theme.bounds())
+    # The material covers only the title bar strip, not the content
+    # area (which the GUI paints with an opaque window color).
+    height = titlebar_height(nswin)
+    width = theme.bounds().size.width
+    total = theme.bounds().size.height
+    effect.setFrame_(((0.0, total - height), (width, height)))
     effect.setAutoresizingMask_(AppKit.NSViewWidthSizable
-                                 | AppKit.NSViewHeightSizable)
+                                | AppKit.NSViewMinYMargin)
     theme.addSubview_positioned_relativeTo_(effect, AppKit.NSWindowBelow,
                                             qt_view)
     _LAST_VIEW = effect

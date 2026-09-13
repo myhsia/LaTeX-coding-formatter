@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
 
 from format_tex import FormatOptions, format_file, scan_directory
 from platform_effects import (apply_effects, last_material_view, notes,
-                              prepare_qt)
+                              prepare_qt, reposition_material)
 
 ENCODINGS = ['同输入', 'utf-8', 'gb18030', 'gbk', 'gb2312', 'big5',
              'utf-16', 'latin-1']
@@ -206,10 +206,13 @@ class MainWindow(QMainWindow):
 
         central = QWidget()
         self.setCentralWidget(central)
-        # A selector-less stylesheet would cascade to every child and
-        # wipe their fills - scope the transparency to this widget only.
+        # Scoped selector: only this widget is painted (children keep
+        # their own fills). The material is confined to the title bar,
+        # so the content area is an opaque window-coloured panel.
         central.setObjectName('central')
-        central.setStyleSheet('#central { background: transparent; }')
+        window_color = self.palette().color(QPalette.ColorRole.Window)
+        central.setStyleSheet('#central {{ background: {}; }}'.format(
+            window_color.name()))
         layout = QVBoxLayout(central)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
@@ -307,6 +310,10 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
         self.apply_window_effects()
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        reposition_material(self)
+
     def event(self, ev):
         if ev.type() == QEvent.Type.WinIdChange and self._effects_applied:
             self.apply_window_effects()
@@ -372,11 +379,35 @@ class MainWindow(QMainWindow):
             lines.append('placeholder shown when empty: {}'.format(
                 placeholder_visible))
             ok = ok and placeholder_visible
-            _, container_transparent = alpha_stats(
+
+            # material must be confined to the title bar strip
+            tb_height = nswin.frame().size.height - \
+                nswin.contentRectForFrameRect_(nswin.frame()).size.height
+            mf = material.frame()
+            confined = (0 < mf.size.height <= tb_height + 1
+                        and abs((mf.origin.y + mf.size.height)
+                                - theme.bounds().size.height) < 2)
+            lines.append('material confined to title bar ({} of {} pt, '
+                         'top-flush): {}'.format(mf.size.height, tb_height,
+                                                 confined))
+            ok = ok and confined
+
+            # content area below the title bar must be opaque
+            content_opaque, content_transparent = alpha_stats(
                 self.centralWidget().grab().toImage())
-            lines.append('container has transparent gaps (glass '
-                         'visible): {}'.format(container_transparent > 0))
-            ok = ok and container_transparent > 0
+            opaque_ok = content_opaque > 0 and content_transparent == 0
+            lines.append('content area opaque (glass not across whole '
+                         'window): {}'.format(opaque_ok))
+            ok = ok and opaque_ok
+
+            try:
+                import AppKit
+                sep = nswin.titlebarSeparatorStyle()
+                sep_ok = sep == AppKit.NSTitlebarSeparatorStyleLine
+            except Exception:
+                sep_ok = False
+            lines.append('titlebar separator = line: {}'.format(sep_ok))
+            ok = ok and sep_ok
 
             # drag & drop: synthesize a drop of a folder (2 files) and a
             # loose file, then assert the list gained them
