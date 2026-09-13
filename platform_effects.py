@@ -367,13 +367,19 @@ def _align_titlebar(nswin):
             bf = button.frame()
             button.setFrameOrigin_((bf.origin.x + delta_x, bf.origin.y))
 
-    # title: left-align it just after the traffic lights
+    # title: left-align it just right of the sidebar divider (falling
+    # back to just after the traffic lights when there is no sidebar)
     title = nswin.toolbarTitlebarTitleTextField()
-    zoom = nswin.standardWindowButton_(AppKit.NSWindowZoomButton)
-    if title is None or zoom is None:
+    if title is None:
         return
-    zoom_rect = screen_rect(zoom)
-    target = zoom_rect.origin.x + zoom_rect.size.width + title_gap()
+    if _SIDEBAR_WIDTH > 0:
+        target = left + _SIDEBAR_WIDTH + title_gap()
+    else:
+        zoom = nswin.standardWindowButton_(AppKit.NSWindowZoomButton)
+        if zoom is None:
+            return
+        zoom_rect = screen_rect(zoom)
+        target = zoom_rect.origin.x + zoom_rect.size.width + title_gap()
     delta = target - screen_rect(title).origin.x
     if abs(delta) >= 0.5:
         tf = title.frame()

@@ -228,15 +228,17 @@ class NativeMenuCombo(QComboBox):
         super().showPopup()
 
     def fit_to_menu(self):
-        """Grow the button so the popup - which AppKit never renders
-        narrower than the button - has exactly the button's width, i.e.
-        the highlighted row and the button coincide."""
+        """Grow the button to the width of its popup content, so at
+        runtime (where the menu is at least the button's width) the
+        popup has exactly the button's width, i.e. the highlighted row
+        and the button coincide."""
         if sys.platform != 'darwin':
             return
         items = [self.itemText(i) for i in range(self.count())]
+        # measure the content only - using the current width as a
+        # minimum would feed the not-yet-laid-out size back in
         menu, _target, _sel = build_menu(items, self.currentText(),
-                                         lambda _v: None, self.CUSTOM_LABEL,
-                                         min_width=self.width())
+                                         lambda _v: None, self.CUSTOM_LABEL)
         needed = int(round(menu.size().width))
         if needed > self.width():
             self.setFixedWidth(needed)
@@ -285,8 +287,10 @@ class MainWindow(QMainWindow):
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
-        splitter.setHandleWidth(1)
-        outer.addWidget(splitter)
+        # comfortable grab area, but Qt draws no line - our own separator
+        # (sidebar_sep) is the visible divider and runs the full height
+        splitter.setHandleWidth(6)
+        splitter.setStyleSheet('QSplitter::handle { background: transparent; }')
         self.splitter = splitter
 
         # --- left: sidebar (file list over the shared blur) ---
@@ -368,6 +372,7 @@ class MainWindow(QMainWindow):
         splitter.setSizes([240, 740])
         splitter.splitterMoved.connect(self._splitter_moved)
         self.content_panel = panel
+        outer.addWidget(splitter, 1)
 
         options = QLabel('选项:')
         layout.addWidget(options)
@@ -437,6 +442,15 @@ class MainWindow(QMainWindow):
                 self.palette().color(QPalette.ColorRole.WindowText).name()))
         layout.addWidget(self.status_label)
 
+        # full-height divider at the sidebar's right edge: it starts at
+        # y=0 so it also runs through the transparent title-bar band
+        self.sidebar_sep = QFrame(central)
+        self.sidebar_sep.setObjectName('sidebarsep')
+        self.sidebar_sep.setFixedWidth(1)
+        self.sidebar_sep.setStyleSheet(
+            '#sidebarsep { background: rgba(120, 120, 128, 0.35); }')
+        self.sidebar_sep.raise_()
+
         self.effect_note = None
         self._effects_applied = False
         self._notes_seen = 0
@@ -463,7 +477,15 @@ class MainWindow(QMainWindow):
         reposition_materials(self)
 
     def _sync_sidebar_width(self):
-        set_sidebar_width(self.sidebar.width())
+        """Keep the native sidebar material and the divider in step with
+        the Qt layout: the divider sits at the content panel's left edge
+        (covering the splitter's invisible grab area)."""
+        divider_x = self.content_panel.mapTo(
+            self.centralWidget(), QPoint(0, 0)).x()
+        set_sidebar_width(divider_x)
+        self.sidebar_sep.setGeometry(divider_x - 1, 0, 1,
+                                     self.centralWidget().height())
+        self.sidebar_sep.raise_()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -568,7 +590,10 @@ class MainWindow(QMainWindow):
                 nswin.toolbar() is None))
             ok = ok and nswin.toolbar() is None
 
-            # the sidebar shares the band's material, full height
+            # the sidebar shares the band's material, full height, and
+            # spans up to the divider (i.e. including the grab area)
+            divider_x_early = self.content_panel.mapTo(
+                self.centralWidget(), QPoint(0, 0)).x()
             sidebar_view = last_sidebar_view()
             sb = sidebar_view.frame() if sidebar_view is not None else None
             sidebar_ok = (
@@ -576,11 +601,11 @@ class MainWindow(QMainWindow):
                 and sidebar_view.material()
                 == AppKit.NSVisualEffectMaterialSidebar
                 and abs(sb.origin.x) < 1
-                and abs(sb.size.width - self.sidebar.width()) < 2
+                and abs(sb.size.width - divider_x_early) < 2
                 and abs(sb.size.height - theme.bounds().size.height) < 2)
             lines.append('sidebar shares the blur, full height, width '
-                         '{:.0f} pt: {}'.format(self.sidebar.width(),
-                                                sidebar_ok))
+                         '{:.0f} pt (to the divider): {}'.format(
+                             divider_x_early, sidebar_ok))
             ok = ok and sidebar_ok
 
             # left-right layout: the list lives in the sidebar column
@@ -706,13 +731,36 @@ class MainWindow(QMainWindow):
                 r = screen_rect(z)
                 return (r.origin.x + r.size.width) - nswin.frame().origin.x
 
+            def divider_x():
+                return self.sidebar_sep.geometry().x() + 1
+
             gap_ok = (title_left() is not None
-                      and abs((title_left() - zoom_right()) - title_gap()) < 2)
-            lines.append('title left-aligned after the lights (gap {:.0f} pt '
-                         'vs {:.0f}): {}'.format(
-                             (title_left() or 0) - zoom_right(), title_gap(),
+                      and abs((title_left() - divider_x())
+                              - title_gap()) < 2)
+            lines.append('title left-aligned right of the divider (gap '
+                         '{:.0f} pt vs {:.0f}): {}'.format(
+                             (title_left() or 0) - divider_x(), title_gap(),
                              gap_ok))
             ok = ok and gap_ok
+
+            # the divider runs the full window height through the band
+            sep = self.sidebar_sep
+            sep_ok = (sep.isVisible()
+                      and abs(sep.geometry().x() + 1
+                              - (self.content_panel.mapTo(
+                                  self.centralWidget(), QPoint(0, 0)).x())
+                              ) < 2
+                      and sep.geometry().y() <= 1
+                      and abs(sep.geometry().height()
+                              - self.centralWidget().height()) < 2)
+            lines.append('sidebar divider full height (y {} h {} of {}) '
+                         'through the band: {}'.format(
+                             sep.geometry().y(), sep.geometry().height(),
+                             self.centralWidget().height(), sep_ok))
+            ok = ok and sep_ok
+            lines.append('splitter grab width: {} pt'.format(
+                self.splitter.handleWidth()))
+            ok = ok and self.splitter.handleWidth() >= 4
             lines.append('title visible: {}'.format(
                 nswin.titleVisibility() == AppKit.NSWindowTitleVisible))
             lines.append('contentView is Qt view: {}'.format(
@@ -765,7 +813,8 @@ class MainWindow(QMainWindow):
             recentred = abs(chrome_offset() - band_height() / 2) < 2
             reinset = abs(lights_offset() - lights_inset()) < 2
             regap = (title_left() is not None
-                     and abs((title_left() - zoom_right()) - title_gap()) < 2)
+                     and abs((title_left() - divider_x())
+                             - title_gap()) < 2)
             lines.append('after resize: centred {}, inset {}, title gap '
                          '{}'.format(recentred, reinset, regap))
             ok = ok and recentred and reinset and regap
