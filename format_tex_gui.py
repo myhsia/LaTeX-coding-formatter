@@ -68,7 +68,10 @@ class MainWindow(QMainWindow):
 
         central = QWidget()
         self.setCentralWidget(central)
-        central.setStyleSheet('background: transparent;')
+        # A selector-less stylesheet would cascade to every child and
+        # wipe their fills - scope the transparency to this widget only.
+        central.setObjectName('central')
+        central.setStyleSheet('#central { background: transparent; }')
         layout = QVBoxLayout(central)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
@@ -187,8 +190,9 @@ class MainWindow(QMainWindow):
             '就绪 (窗口效果: {})'.format(self.effect_note))
 
     def self_test(self):
-        """Assert the native window is visible and the material view sits
-        below the Qt view; writes format_tex_gui_selftest.txt and returns
+        """Assert the native window is visible, the material view sits
+        below the Qt view, and widgets paint their own backgrounds over
+        the glass; writes format_tex_gui_selftest.txt and returns
         True/False (for the --self-test exit code)."""
         import objc
         import AppKit
@@ -212,6 +216,29 @@ class MainWindow(QMainWindow):
             lines.append('contentView is Qt view: {}'.format(
                 nswin.contentView() is qt_view))
             lines.append('effect: {}'.format(self.effect_note))
+
+            def alpha_stats(img):
+                opaque = transparent = 0
+                sy = max(1, img.height() // 24)
+                sx = max(1, img.width() // 24)
+                for y in range(0, img.height(), sy):
+                    for x in range(0, img.width(), sx):
+                        a = img.pixelColor(x, y).alpha()
+                        if a > 250:
+                            opaque += 1
+                        elif a < 5:
+                            transparent += 1
+                return opaque, transparent
+
+            list_opaque, _ = alpha_stats(self.file_list.grab().toImage())
+            lines.append('file list paints a background: {}'.format(
+                list_opaque > 0))
+            ok = ok and list_opaque > 0
+            _, container_transparent = alpha_stats(
+                self.centralWidget().grab().toImage())
+            lines.append('container has transparent gaps (glass '
+                         'visible): {}'.format(container_transparent > 0))
+            ok = ok and container_transparent > 0
         except Exception as exc:
             lines.append('self-test exception: {}: {}'.format(
                 type(exc).__name__, exc))
