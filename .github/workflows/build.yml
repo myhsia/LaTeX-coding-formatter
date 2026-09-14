@@ -153,16 +153,38 @@ jobs:
               -d Version="${{ steps.ver.outputs.version }}" `
               -o "dist-msi/format-tex-$($a.suffix).msi"
           }
-      - name: Verify MSI payload
+      - name: Verify MSI contents
         shell: pwsh
         run: |
+          # read the MSI database (works for any architecture - an
+          # arm64 MSI cannot be admin-extracted on an x64 host)
+          $expected = @('format-tex-gui.exe', 'format-tex.exe')
+          $version = '${{ steps.ver.outputs.version }}'
           foreach ($msi in Get-ChildItem dist-msi/*.msi) {
-            $tmp = Join-Path $env:TEMP $msi.BaseName
-            Start-Process msiexec -Wait -ArgumentList @(
-              '/a', "`"$($msi.FullName)`"", '/qn', "TARGETDIR=`"$tmp`"")
-            $exes = Get-ChildItem -Path $tmp -Recurse -Include format-tex-gui.exe,format-tex.exe
-            if ($exes.Count -lt 2) { throw "payload incomplete in $($msi.Name)" }
-            Write-Host "$($msi.Name): found $($exes.Count) executables"
+            $installer = New-Object -ComObject WindowsInstaller.Installer
+            $db = $installer.OpenDatabase($msi.FullName, 0)
+            $view = $db.OpenView('SELECT FileName FROM File')
+            $view.Execute()
+            $names = @()
+            while ($null -ne ($record = $view.Fetch())) {
+              $names += $record.StringData(1).Split('|')[0]
+            }
+            $view.Close()
+            $pview = $db.OpenView(
+              "SELECT Value FROM Property WHERE Property='ProductVersion'")
+            $pview.Execute()
+            $prec = $pview.Fetch()
+            $product = $prec.StringData(1)
+            $pview.Close()
+            $db.Close()
+            $missing = $expected | Where-Object { $names -notcontains $_ }
+            if ($missing) {
+              throw "$($msi.Name): missing $($missing -join ', ')"
+            }
+            if ($product -ne $version) {
+              throw "$($msi.Name): ProductVersion $product != $version"
+            }
+            Write-Host "$($msi.Name): $($names.Count) files, version $product, expected executables present"
           }
       - uses: actions/upload-artifact@v4
         with:
