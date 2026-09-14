@@ -119,7 +119,9 @@ jobs:
       - name: Install WiX
         shell: pwsh
         run: |
-          dotnet tool install --global wix
+          # pinned: the OSMF acceptance token below is version specific
+          # (wix7 for v7; upgrading to v8 would need -acceptEula wix8)
+          dotnet tool install --global wix --version 7.0.0
           "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
       - name: Determine MSI version
         id: ver
@@ -146,6 +148,7 @@ jobs:
                            @{suffix='windows-arm64';  arch='arm64'})) {
             $payload = (Resolve-Path "payloads/msi-payload-$($a.suffix)").Path
             wix build packaging/windows/format-tex.wxs -arch $($a.arch) `
+              -acceptEula wix7 `
               -d PayloadDir="$payload" `
               -d Version="${{ steps.ver.outputs.version }}" `
               -o "dist-msi/format-tex-$($a.suffix).msi"

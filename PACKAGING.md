@@ -74,6 +74,10 @@ PyInstaller 不支持跨平台编译, Windows/Linux 版本通过 CI 在对应系
   onedir 目录 (启动更快) 与命令行版单文件 exe.
 * MSI 与各 exe 均**未签名**, 首次运行/安装时 Windows SmartScreen 可能提示
   风险 (选择"更多信息 → 仍要运行"即可); 如需消除提示请配置代码签名证书.
+* MSI 使用 WiX Toolset v7 构建. WiX 自 v6/v7 起要求接受 OSMF (Open Source
+  Maintenance Fee) EULA, CI 中通过 `-acceptEula wix7` 显式接受 (该接受标记
+  与主版本号绑定); OSMF 对**有营收**的使用者另有付费义务.
+  CI 将 WiX 固定为 `7.0.0`: 升级到 v8 时需同时把标记改为 `wix8`.
 * 版本号取自推送的 `v*` 标签 (例如 `v1.0` → `1.0.0`), 手动触发时默认 `1.0.0`.
 
 ## 使用方法
