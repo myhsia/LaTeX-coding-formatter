@@ -182,7 +182,12 @@ secondary 标签色, 复现原生的"非活动变暗"行为 (实测活动态 #dd
 选中行使用**系统强调色** (取 `QPalette.Highlight`, 因此跟随用户的强调色/
 增强对比度设置) 绘制**整行方角色条**并配高亮文字, 窗口失焦时按原生方式变暗;
 列表支持多选 (⌘/Ctrl 点选、⇧ 连选、⌘A 全选)。
-框内底部为 System Settings 风格的 **+ / −** 按钮条 (左侧, 中间竖分隔线):
+框内底部为 System Settings 风格的 **+ / −** 按钮条 (左侧): macOS 上使用
+**原生 `NSSegmentedControl`** (`NSSegmentStyleSeparated` + SF Symbols
+`plus`/`minus`, 因此字重与按下态都是系统原生观感, 且两段之间有原生分隔线),
+其后方是**原生材质条** (`NSVisualEffectView`, 默认 material `headerView`,
+可用 `FORMAT_TEX_FOOTER_MATERIAL` 覆盖为 `contentBackground` 等做对比),
+使该行像系统设置面板的页脚一样呈毛玻璃而非纯色填充; 其他平台回退为 Qt 按钮.
 **+** 直接打开文件选择对话框, **−** 从列表移除**所选**条目 (无选中时置灰);
 列表为空时显示提示文字与 "选择文件/选择目录" 链接 (可拖入文件或文件夹)。
 右侧为不透明的内容面板 (选项复选框、输出编码、应用按钮、差异预览与状态栏)。

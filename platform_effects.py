@@ -46,6 +46,12 @@ _SWITCH_TARGET = None
 _SWITCH_SLOT = None
 _SWITCH_TARGET_CLASS = None
 _CLICK_THROUGH_CLASS = None
+_PLUS_MINUS = None
+_PLUS_MINUS_TARGET = None
+_PLUS_MINUS_TARGET_CLASS = None
+_FOOTER_VIEW = None
+_FOOTER_SLOT = None
+_PLUS_MINUS_SLOT = None
 
 
 def _note(msg):
@@ -258,6 +264,200 @@ def _debug_outlines():
         _outline(_TITLE_VIEW, 1.0, 0.9, 0.0)     # yellow: title label
 
 
+def footer_material_name():
+    """Material for the native strip behind the list's +/- row. macOS
+    Settings panes give the footer its own subtle material; override for
+    A/B testing with FORMAT_TEX_FOOTER_MATERIAL
+    (headerView|contentBackground|underWindowBackground)."""
+    return os.environ.get('FORMAT_TEX_FOOTER_MATERIAL',
+                          'headerView').strip()
+
+
+def create_footer_strip(window, slot):
+    """A native material strip behind the list's +/- row, so the footer
+    reads like a Settings pane's footer rather than a flat tint. Sits
+    BELOW the Qt view (the Qt row is transparent), with its bottom
+    corners rounded to follow the list frame. Returns True on success."""
+    global _FOOTER_VIEW
+    if sys.platform != 'darwin':
+        return False
+    try:
+        import objc
+        import AppKit
+
+        if _FOOTER_VIEW is None:
+            material = _material_constant(AppKit, footer_material_name())
+            _FOOTER_VIEW = _make_material_view(
+                AppKit, material,
+                AppKit.NSVisualEffectBlendingModeWithinWindow)
+            # follow the frame's bottom radius (layer masks are numeric:
+            # minXMaxY | maxXMaxY = 4 | 8)
+            try:
+                _FOOTER_VIEW.setWantsLayer_(True)
+                _FOOTER_VIEW.layer().setCornerRadius_(8.0)
+                _FOOTER_VIEW.layer().setMaskedCorners_(4 | 8)
+            except Exception:
+                pass
+        qt_view = objc.objc_object(c_void_p=int(window.winId()))
+        theme = qt_view.superview()
+        try:
+            _FOOTER_VIEW.removeFromSuperview()
+        except Exception:
+            pass
+        theme.addSubview_positioned_relativeTo_(_FOOTER_VIEW,
+                                               AppKit.NSWindowBelow, qt_view)
+        place_footer_strip(window, slot)
+        return True
+    except Exception as exc:
+        _note('native footer strip failed: {}: {}'.format(
+            type(exc).__name__, exc))
+        return False
+
+
+def place_footer_strip(window, slot):
+    """Fit the footer strip to the Qt ``slot`` widget (the bar row)."""
+    global _FOOTER_SLOT
+    if sys.platform != 'darwin' or _FOOTER_VIEW is None or slot is None:
+        return
+    _FOOTER_SLOT = slot
+    try:
+        import objc
+        from PySide6.QtCore import QPoint
+
+        qt_view = objc.objc_object(c_void_p=int(window.winId()))
+        theme = qt_view.superview()
+        top_left = slot.mapTo(window, QPoint(0, 0))
+        rect = ((float(top_left.x()), float(top_left.y())),
+                (float(slot.width()), float(slot.height())))
+        target = qt_view.convertRect_toView_(rect, theme)
+        _FOOTER_VIEW.setFrame_((target.origin, target.size))
+        _FOOTER_VIEW.setHidden_(slot.isVisible() is False)
+    except Exception as exc:
+        _note('footer strip placement failed: {}: {}'.format(
+            type(exc).__name__, exc))
+
+
+def has_footer_strip():
+    return _FOOTER_VIEW is not None
+
+
+def footer_strip_view():
+    return _FOOTER_VIEW
+
+
+def _plus_minus_target_class():
+    """pyobjc target for the +/- segmented control: dispatch on the
+    clicked segment."""
+    global _PLUS_MINUS_TARGET_CLASS
+    if _PLUS_MINUS_TARGET_CLASS is None:
+        from AppKit import NSObject
+
+        class _PlusMinusTarget(NSObject):
+            def segmentClicked_(self, sender):
+                if int(sender.selectedSegment()) == 0:
+                    self.on_add()
+                else:
+                    self.on_remove()
+
+        _PLUS_MINUS_TARGET_CLASS = _PlusMinusTarget
+    return _PLUS_MINUS_TARGET_CLASS
+
+
+def create_native_plus_minus(window, on_add, on_remove):
+    """Native +/- control: an NSSegmentedControl with the separated style
+    (the System Settings look: two glyphs with a divider, no bezel) and
+    SF Symbol plus/minus images, so the artwork has the native weight and
+    pressed state. Inserted ABOVE the Qt view, over the footer strip.
+    Returns True on success; callers keep the Qt buttons otherwise."""
+    global _PLUS_MINUS, _PLUS_MINUS_TARGET
+    if sys.platform != 'darwin':
+        return False
+    try:
+        import objc
+        import AppKit
+
+        if _PLUS_MINUS is None:
+            target = _plus_minus_target_class().alloc().init()
+            target.on_add = on_add
+            target.on_remove = on_remove
+            control = AppKit.NSSegmentedControl.alloc().init()
+            control.setSegmentCount_(2)
+            control.setSegmentStyle_(AppKit.NSSegmentStyleSeparated)
+            control.setTrackingMode_(AppKit.NSSegmentSwitchTrackingMomentary)
+            for index, symbol in enumerate(('plus', 'minus')):
+                image = AppKit.NSImage                     .imageWithSystemSymbolName_accessibilityDescription_(
+                        symbol, symbol)
+                if image is None:
+                    legacy = (AppKit.NSImageNameAddTemplate if index == 0
+                              else AppKit.NSImageNameRemoveTemplate)
+                    image = AppKit.NSImage.imageNamed_(legacy)
+                control.setImage_forSegment_(image, index)
+                control.setImageScaling_forSegment_(
+                    AppKit.NSImageScaleProportionallyDown, index)
+                control.setWidth_forSegment_(28.0, index)
+            control.setTarget_(target)
+            control.setAction_(b'segmentClicked:')
+            control.sizeToFit()
+            _PLUS_MINUS, _PLUS_MINUS_TARGET = control, target
+
+        qt_view = objc.objc_object(c_void_p=int(window.winId()))
+        theme = qt_view.superview()
+        try:
+            _PLUS_MINUS.removeFromSuperview()
+        except Exception:
+            pass
+        theme.addSubview_positioned_relativeTo_(_PLUS_MINUS,
+                                               AppKit.NSWindowAbove, qt_view)
+        _PLUS_MINUS.sizeToFit()
+        return True
+    except Exception as exc:
+        _note('native +/- control failed: {}: {}'.format(
+            type(exc).__name__, exc))
+        return False
+
+
+def place_native_plus_minus(window, slot):
+    """Left-align the +/- control inside the Qt ``slot`` (the bar row)."""
+    global _PLUS_MINUS_SLOT
+    if sys.platform != 'darwin' or _PLUS_MINUS is None or slot is None:
+        return
+    _PLUS_MINUS_SLOT = slot
+    try:
+        import objc
+        from PySide6.QtCore import QPoint
+
+        qt_view = objc.objc_object(c_void_p=int(window.winId()))
+        theme = qt_view.superview()
+        top_left = slot.mapTo(window, QPoint(0, 0))
+        rect = ((float(top_left.x()), float(top_left.y())),
+                (float(slot.width()), float(slot.height())))
+        target = qt_view.convertRect_toView_(rect, theme)
+        size = _PLUS_MINUS.frame().size
+        x = target.origin.x + 6.0
+        y = target.origin.y + (target.size.height - size.height) / 2.0
+        _PLUS_MINUS.setFrame_(((x, y), (size.width, size.height)))
+        _PLUS_MINUS.setHidden_(slot.isVisible() is False)
+    except Exception as exc:
+        _note('+/- placement failed: {}: {}'.format(type(exc).__name__, exc))
+
+
+def set_native_plus_minus_enabled(remove_enabled):
+    """Grey out the '-' segment when nothing is selected."""
+    try:
+        if _PLUS_MINUS is not None:
+            _PLUS_MINUS.setEnabled_forSegment_(bool(remove_enabled), 1)
+    except Exception:
+        pass
+
+
+def has_native_plus_minus():
+    return _PLUS_MINUS is not None
+
+
+def native_plus_minus_view():
+    return _PLUS_MINUS
+
+
 def _switch_target_class():
     """pyobjc NSObject subclass acting as the switch's action target."""
     global _SWITCH_TARGET_CLASS
@@ -401,6 +601,10 @@ def reposition_materials(window):
         _align_titlebar(nswin)
         if _SWITCH is not None and _SWITCH_SLOT is not None:
             place_native_switch(window, _SWITCH_SLOT)
+        if _FOOTER_VIEW is not None and _FOOTER_SLOT is not None:
+            place_footer_strip(window, _FOOTER_SLOT)
+        if _PLUS_MINUS is not None and _PLUS_MINUS_SLOT is not None:
+            place_native_plus_minus(window, _PLUS_MINUS_SLOT)
     except Exception as exc:
         _note('reposition failed: {}: {}'.format(type(exc).__name__, exc))
 

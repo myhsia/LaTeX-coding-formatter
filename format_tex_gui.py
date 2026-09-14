@@ -42,17 +42,22 @@ from native_menu import (CUSTOM_SENTINEL, build_menu, menu_entries,
                          popup_native_menu)
 from platform_effects import (apply_effects, arrange_in_front,
                               band_above_content,
+                              create_footer_strip,
+                              create_native_plus_minus,
                               band_height, band_material_name,
                               create_native_switch, debug_enabled,
                               has_native_switch, last_material_view,
                               last_sidebar_view, last_title_view,
                               lights_inset,
+                              footer_strip_view, has_native_plus_minus,
+                              native_plus_minus_view,
                               native_switch_state, native_switch_view,
                               minimize_window, native_window_color,
                               notes,
                               place_native_switch, prepare_qt,
                               reposition_materials, set_sidebar_width,
-                              title_gap, zoom_window)
+                              set_native_plus_minus_enabled, title_gap,
+                              zoom_window)
 
 ENCODINGS = ['同输入', 'utf-8', 'gb18030', 'gbk', 'gb2312', 'big5',
              'utf-16', 'latin-1']
@@ -437,8 +442,7 @@ class MainWindow(QMainWindow):
         frame.setObjectName('fileframe')
         frame.setStyleSheet(
             '#fileframe { border: 1px solid rgba(120, 120, 128, 0.28);'
-            ' border-radius: 8px;'
-            ' background: rgba(120, 120, 128, 0.06); }')
+            ' border-radius: 8px; }')
         flv = QVBoxLayout(frame)
         flv.setContentsMargins(1, 1, 1, 1)
         flv.setSpacing(0)
@@ -458,7 +462,9 @@ class MainWindow(QMainWindow):
             'QPushButton:disabled {{ color: rgba(120, 120, 128, 0.45); }}'
             .format(self.palette().color(
                 QPalette.ColorRole.WindowText).name()))
-        bar = QHBoxLayout()
+        self.pm_bar = QWidget()
+        self.pm_bar.setObjectName('plusminusbar')
+        bar = QHBoxLayout(self.pm_bar)
         bar.setContentsMargins(4, 2, 4, 2)
         bar.setSpacing(0)
         self.btn_add = QPushButton('+')
@@ -484,7 +490,7 @@ class MainWindow(QMainWindow):
         bar.addWidget(divider)
         bar.addWidget(self.btn_remove)
         bar.addStretch(1)
-        flv.addLayout(bar)
+        flv.addWidget(self.pm_bar)
         self.file_frame = frame
         slayout.addWidget(frame, 1)
         self.sidebar = sidebar
@@ -787,6 +793,7 @@ class MainWindow(QMainWindow):
         self.effect_note = apply_effects(self, self.dark)
         self._effects_applied = True
         self._setup_native_switch()
+        self._setup_native_plus_minus()
         if debug_enabled():
             # FORMAT_TEX_DEBUG=1: outline the content surface too
             self.content_panel.setStyleSheet(
@@ -1358,12 +1365,32 @@ class MainWindow(QMainWindow):
             frame = self.content_panel.parent() and None
             frame = self.findChild(QFrame, 'fileframe')
             frame_ok = (frame is not None
-                        and 'border' in frame.styleSheet())
+                        and 'border' in frame.styleSheet()
+                        and 'background' not in frame.styleSheet())
             add_btn = self.btn_add
             remove_btn = self.btn_remove
-            buttons_ok = (add_btn.isEnabled() and 'listadd' ==
-                          add_btn.objectName() and remove_btn.isEnabled()
-                          and '−' == remove_btn.text())
+            if has_native_plus_minus():
+                control = native_plus_minus_view()
+                strip = footer_strip_view()
+                images_ok = all(
+                    control.imageForSegment_(i) is not None for i in (0, 1))
+                geom_ok = False
+                try:
+                    slot = self.pm_bar
+                    expected = slot.width()
+                    geom_ok = abs(control.frame().size.width) > 20 and                         abs(strip.frame().size.width - expected) < 3
+                except Exception:
+                    geom_ok = False
+                buttons_ok = (control.segmentCount() == 2 and images_ok
+                              and strip is not None and geom_ok
+                              and not self.btn_add.isVisible())
+                native_note = 'native NSSegmentedControl + footer strip'
+            else:
+                buttons_ok = (add_btn.isEnabled()
+                              and 'listadd' == add_btn.objectName()
+                              and remove_btn.isEnabled()
+                              and '−' == remove_btn.text())
+                native_note = 'Qt fallback buttons'
             items_ok = all(
                 self.file_list.item(i).data(ROLE_PATH)
                 and self.file_list.item(i).text()
@@ -1392,11 +1419,11 @@ class MainWindow(QMainWindow):
                         and any('选择目录' in t for t in labels))
             ui_ok = (frame_ok and buttons_ok and items_ok and remove_ok
                      and empty_ok)
-            lines.append('list UI: frame {}, +/- buttons {}, rows '
-                         '(name/tooltip/icon) {}, - removes selection {}, '
-                         'empty state {}: {}'.format(
-                             frame_ok, buttons_ok, items_ok, remove_ok,
-                             empty_ok, ui_ok))
+            lines.append('list UI: frame (no flat fill) {}, +/- {} {}, '
+                         'rows (name/tooltip/icon) {}, - removes selection '
+                         '{}, empty state {}: {}'.format(
+                             frame_ok, native_note, buttons_ok, items_ok,
+                             remove_ok, empty_ok, ui_ok))
             ok = ok and ui_ok
 
             lines.append('selection: multi-select {}, no preview button {}, '
@@ -1557,7 +1584,25 @@ class MainWindow(QMainWindow):
         return icon
 
     def _sync_list_buttons(self, *_args):
-        self.btn_remove.setEnabled(bool(self.file_list.selectedItems()))
+        enabled = bool(self.file_list.selectedItems())
+        self.btn_remove.setEnabled(enabled)
+        set_native_plus_minus_enabled(enabled)
+
+    def _setup_native_plus_minus(self):
+        """macOS: a native footer material strip behind the +/- row and an
+        NSSegmentedControl (separated style, SF Symbols) above it; the Qt
+        buttons stay as the fallback on other platforms."""
+        try:
+            strip = create_footer_strip(self, self.pm_bar)
+            control = create_native_plus_minus(self, self.add_files,
+                                               self._remove_selected)
+        except Exception:
+            strip = control = False
+        if strip and control:
+            self.btn_add.setVisible(False)
+            self.btn_remove.setVisible(False)
+        self._native_plus_minus = bool(control)
+        self._sync_list_buttons()
 
     def _remove_selected(self):
         """Drop the selected rows from the list (the − button)."""
