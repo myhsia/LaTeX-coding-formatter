@@ -160,7 +160,7 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "MSI version: $v"
       - name: Download Windows payloads
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: msi-payload-*
           path: payloads
