@@ -41,7 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # the Windows arm64 image ships its own arm64 Python
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         if: ${{ !(runner.os == 'Windows' && runner.arch == 'ARM64') }}
         with:
           python-version: '3.12'
@@ -137,7 +137,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Install WiX
