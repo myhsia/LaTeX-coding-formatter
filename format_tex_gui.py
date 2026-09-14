@@ -34,12 +34,13 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
 from format_tex import FormatOptions, format_file, scan_directory
 from native_menu import (CUSTOM_SENTINEL, build_menu, menu_entries,
                          popup_native_menu)
-from platform_effects import (apply_effects, band_height,
-                              band_material_name,
-                              create_native_switch, has_native_switch,
-                              last_material_view, last_sidebar_view,
-                              lights_inset, native_switch_state,
-                              native_switch_view, notes,
+from platform_effects import (apply_effects, band_above_content,
+                              band_height, band_material_name,
+                              create_native_switch, debug_enabled,
+                              has_native_switch, last_material_view,
+                              last_sidebar_view, lights_inset,
+                              native_switch_state, native_switch_view,
+                              native_window_color, notes,
                               place_native_switch, prepare_qt,
                               reposition_materials, set_sidebar_width,
                               title_gap)
@@ -277,11 +278,16 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         # Finder-like layout: the top band_height() points stay
-        # transparent so the native blur shows through, and the left
-        # sidebar column shares that material (full height). The right
-        # panel is opaque with a hairline separator under the band.
+        # transparent so the native toolbar material shows through, and
+        # the left sidebar column shares the sidebar material (full
+        # height). The right panel paints the native window background,
+        # so the strip frosted over it and the content below it are the
+        # system colours - the material alone marks the boundary.
         window_color = self.palette().color(QPalette.ColorRole.Window)
-        mid_color = self.palette().color(QPalette.ColorRole.Mid)
+        native_bg = native_window_color(self.dark)
+        if native_bg:
+            window_color = QColor(native_bg)
+        self.native_bg = native_bg
         outer = QHBoxLayout(central)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
@@ -356,21 +362,18 @@ class MainWindow(QMainWindow):
         self.sidebar = sidebar
         splitter.addWidget(sidebar)
 
-        # --- right: opaque content panel ---
+        # --- right: content panel on the native window background ---
         panel = QWidget()
         panel.setObjectName('panel')
         panel.setMinimumWidth(420)
         panel.setStyleSheet('#panel {{ background: {}; }}'.format(
             window_color.name()))
+        self.content_bg = window_color
         pv = QVBoxLayout(panel)
+        # no hairline: the frosted strip over this surface is separated
+        # from the content below only by the material (Finder-style)
         pv.setContentsMargins(12, int(band_height()) + 12, 12, 12)
         pv.setSpacing(8)
-        hairline = QFrame()
-        hairline.setObjectName('hairline')
-        hairline.setFixedHeight(1)
-        hairline.setStyleSheet('#hairline {{ background: {}; }}'.format(
-            mid_color.name()))
-        pv.addWidget(hairline)
         layout = pv
         splitter.addWidget(panel)
         splitter.setStretchFactor(0, 0)
@@ -504,6 +507,11 @@ class MainWindow(QMainWindow):
         self.effect_note = apply_effects(self, self.dark)
         self._effects_applied = True
         self._setup_native_switch()
+        if debug_enabled():
+            # FORMAT_TEX_DEBUG=1: outline the content surface too
+            self.content_panel.setStyleSheet(
+                '#panel {{ background: {}; border: 1px solid red; }}'.format(
+                    self.content_bg.name()))
         new_notes = notes()[self._notes_seen:]
         self._notes_seen = len(notes())
         for msg in new_notes:
@@ -576,7 +584,7 @@ class MainWindow(QMainWindow):
                 self.centralWidget(), QPoint(0, 0)).x()
             bf = band.frame() if band is not None else None
             band_ok = (bf is not None
-                       and 'VisualEffectView' in type(band).__name__
+                       and isinstance(band, AppKit.NSVisualEffectView)
                        and abs(bf.size.height - band_height()) < 1
                        and abs(bf.origin.x - boundary) < 2
                        and abs(bf.size.width
@@ -619,6 +627,30 @@ class MainWindow(QMainWindow):
             lines.append('no native toolbar: {}'.format(
                 nswin.toolbar() is None))
             ok = ok and nswin.toolbar() is None
+
+            # the material must actually be visible: ordered above Qt's
+            # view (whose panel is opaque) but below the titlebar chrome,
+            # and click-through so the Qt widgets keep receiving events
+            order_ok = band_above_content(self)
+            subs = list(theme.subviews())
+            side_below = (sidebar_v is not None and sidebar_v in subs
+                          and qt_view in subs
+                          and subs.index(sidebar_v) < subs.index(qt_view))
+            click_ok = (band is not None
+                        and band.hitTest_((10.0, 10.0)) is None)
+            lines.append('band above content, below chrome: {}, '
+                         'sidebar below Qt: {}, click-through: {}'.format(
+                             order_ok, side_below, click_ok))
+            ok = ok and order_ok and side_below and click_ok
+
+            # the content surface uses the native window background
+            expected_bg = native_window_color(self.dark)
+            bg_ok = (expected_bg is None
+                     or expected_bg.lower() in
+                     self.content_panel.styleSheet().lower())
+            lines.append('native window background ({}): {}'.format(
+                expected_bg, bg_ok))
+            ok = ok and bg_ok
 
             # the sidebar shares the band's material, full height, and
             # spans up to the divider (i.e. including the grab area)
@@ -835,12 +867,12 @@ class MainWindow(QMainWindow):
                 opaque_ok))
             ok = ok and opaque_ok
 
-            # our own 1 pt hairline separates band and content
-            lines.append('separator hairline present: {}'.format(
-                self.centralWidget().findChild(
-                    QFrame, 'hairline') is not None))
-            ok = ok and self.centralWidget().findChild(
-                QFrame, 'hairline') is not None
+            # no hairline: the material alone marks the strip/content
+            # boundary (Finder-style)
+            no_hairline = self.centralWidget().findChild(
+                QFrame, 'hairline') is None
+            lines.append('no separator hairline: {}'.format(no_hairline))
+            ok = ok and no_hairline
 
             # AppKit resets the chrome on resize - re-application must
             # restore both the centring and the inset

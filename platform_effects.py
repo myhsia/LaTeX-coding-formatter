@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 r"""Native window chrome per OS, for the Qt GUI.
 
-macOS  A custom 52 pt title band drawn with an NSVisualEffectView
-       (sidebar blur); the native titlebar chrome (traffic lights and
-       window title) is shifted down so it is vertically centred in the
-       band, and the Qt content is expected to leave a matching
-       transparent strip at the top (see band_height()).
+macOS  A custom 52 pt toolbar strip drawn with an NSVisualEffectView
+       (headerView material, withinWindow) sits ABOVE the Qt view so it
+       frosts the opaque content panel, and is click-through so the Qt
+       widgets keep working. The sidebar material (sidebar,
+       behindWindow) sits BELOW the Qt view, which shows it wherever the
+       sidebar widget is transparent; it spans the full window height, so
+       one continuous blur runs from the top edge down (no seam, no line).
+       The native titlebar chrome (traffic lights and window title) is
+       centred in the strip and the title left-aligned past the sidebar.
+       The Qt content is expected to leave a matching transparent strip
+       at the top (see band_height()).
 Windows 11  DWM Mica (with legacy-attribute and solid fallbacks)
 Linux  system Qt platform theme (no override)
 
@@ -38,6 +44,7 @@ _SWITCH = None
 _SWITCH_TARGET = None
 _SWITCH_SLOT = None
 _SWITCH_TARGET_CLASS = None
+_CLICK_THROUGH_CLASS = None
 
 
 def _note(msg):
@@ -85,7 +92,7 @@ def last_sidebar_view():
 
 
 def band_material_name():
-    """Material for the title band. Finder-style toolbars use a toolbar
+    """Material for the title strip. Finder-style toolbars use a toolbar
     material with `withinWindow` blending (blurring the window's own
     content, so over the opaque content it looks like a frosted layer),
     while the sidebar keeps `behindWindow` (the desktop blurs through).
@@ -93,6 +100,12 @@ def band_material_name():
     (sidebar|headerView|titlebar|underWindowBackground)."""
     return os.environ.get('FORMAT_TEX_BAND_MATERIAL',
                           'headerView').strip()
+
+
+def band_is_click_through():
+    """True on macOS: the strip material sits above the Qt view but must
+    never consume mouse events, so it is a click-through subclass."""
+    return sys.platform == 'darwin'
 
 
 def _material_constant(AppKit, name):
@@ -106,6 +119,42 @@ def _material_constant(AppKit, name):
     return table.get(name.lower(), AppKit.NSVisualEffectMaterialHeaderView)
 
 
+def native_window_color(dark=False):
+    """The platform's native window background as '#rrggbb', so Qt can
+    paint its content surface with the real system colour instead of its
+    own approximation. Falls back to None when unavailable.
+
+    NSColor.windowBackgroundColor is a dynamic catalog colour, so its
+    resolution depends on the process appearance context. Measured in
+    dark mode: a real native window renders as #1f1f1f and this call
+    returns #1e1e1e in the packaged app - a match. Forcing a synthetic
+    Aqua/DarkAqua appearance instead yields #323232, which does NOT match
+    a real window, so the call is deliberately made in context here."""
+    if sys.platform == 'darwin':
+        try:
+            import AppKit
+
+            rgb = AppKit.NSColor.windowBackgroundColor() \
+                .colorUsingColorSpace_(AppKit.NSColorSpace.sRGBColorSpace())
+            if rgb is None:
+                return None
+            value = '#{:02x}{:02x}{:02x}'.format(
+                int(round(rgb.redComponent() * 255)),
+                int(round(rgb.greenComponent() * 255)),
+                int(round(rgb.blueComponent() * 255)))
+            if debug_enabled():
+                print('[debug] windowBackgroundColor dark={} -> {}'.format(
+                    dark, value), flush=True)
+            return value
+        except Exception as exc:
+            _note('native window colour failed: {}: {}'.format(
+                type(exc).__name__, exc))
+            return None
+    if sys.platform == 'win32':
+        return '#1f1f1f' if dark else '#f3f3f3'
+    return None
+
+
 def set_sidebar_width(width):
     """Tell the native layer how wide the Qt sidebar column is, so the
     sidebar material can be framed to match (Finder-style full-height
@@ -115,6 +164,34 @@ def set_sidebar_width(width):
         _SIDEBAR_WIDTH = max(0.0, float(width))
     except (TypeError, ValueError):
         _SIDEBAR_WIDTH = 0.0
+
+
+def debug_enabled():
+    """FORMAT_TEX_DEBUG=1 outlines the native material views so frames can
+    be verified from a screenshot."""
+    return os.environ.get('FORMAT_TEX_DEBUG', '').strip() not in ('', '0')
+
+
+def _outline(view, red, green, blue):
+    try:
+        import AppKit
+
+        view.setWantsLayer_(True)
+        layer = view.layer()
+        layer.setBorderWidth_(1.0)
+        layer.setBorderColor_(AppKit.NSColor.colorWithSRGBRed_green_blue_alpha_(
+            red, green, blue, 1.0).CGColor())
+    except Exception as exc:
+        _note('debug outline failed: {}: {}'.format(type(exc).__name__, exc))
+
+
+def _debug_outlines():
+    if not debug_enabled():
+        return
+    if _BAND_VIEW is not None:
+        _outline(_BAND_VIEW, 1.0, 0.0, 0.0)      # red: toolbar strip
+    if _SIDEBAR_VIEW is not None:
+        _outline(_SIDEBAR_VIEW, 0.0, 0.6, 1.0)   # blue: sidebar column
 
 
 def _switch_target_class():
@@ -264,8 +341,26 @@ def reposition_materials(window):
         _note('reposition failed: {}: {}'.format(type(exc).__name__, exc))
 
 
-def _make_material_view(AppKit, material, blending):
-    view = AppKit.NSVisualEffectView.alloc().init()
+def _click_through_class():
+    """pyobjc NSVisualEffectView subclass that never takes mouse events,
+    so the strip material can sit above the Qt view without blocking it."""
+    global _CLICK_THROUGH_CLASS
+    if _CLICK_THROUGH_CLASS is None:
+        import AppKit
+
+        class _ClickThroughEffectView(AppKit.NSVisualEffectView):
+            def hitTest_(self, point):
+                return None
+
+        _CLICK_THROUGH_CLASS = _ClickThroughEffectView
+    return _CLICK_THROUGH_CLASS
+
+
+def _make_material_view(AppKit, material, blending, click_through=False):
+    if click_through:
+        view = _click_through_class().alloc().init()
+    else:
+        view = AppKit.NSVisualEffectView.alloc().init()
     view.setMaterial_(material)
     view.setBlendingMode_(blending)
     view.setState_(AppKit.NSVisualEffectStateFollowsWindowActiveState)
@@ -295,34 +390,68 @@ def _macos(window, dark):
     nswin.setTitlebarAppearsTransparent_(True)
     nswin.setTitleVisibility_(AppKit.NSWindowTitleVisible)
     try:
+        nswin.setBackgroundColor_(AppKit.NSColor.windowBackgroundColor())
+    except Exception as exc:
+        _note('native window background failed: {}'.format(exc))
+    try:
         nswin.setTitlebarSeparatorStyle_(AppKit.NSTitlebarSeparatorStyleNone)
     except Exception:
         pass
 
     if _BAND_VIEW is None:
-        # toolbar-like strip for the title bar right of the sidebar:
-        # blurs the window's own content behind it
+        # toolbar-like strip for the title bar right of the sidebar: it
+        # sits ABOVE the Qt view (the content panel is opaque, so a view
+        # below it would never be seen) and blurs that content; it is
+        # click-through so the Qt widgets keep receiving events
         _BAND_VIEW = _make_material_view(
             AppKit, _material_constant(AppKit, band_material_name()),
-            AppKit.NSVisualEffectBlendingModeWithinWindow)
+            AppKit.NSVisualEffectBlendingModeWithinWindow, click_through=True)
     if _SIDEBAR_VIEW is None:
-        # sidebar-like: let the desktop blur through
+        # sidebar-like: let the desktop blur through - below the Qt view,
+        # which shows it wherever the sidebar widget is transparent
         _SIDEBAR_VIEW = _make_material_view(
             AppKit, AppKit.NSVisualEffectMaterialSidebar,
             AppKit.NSVisualEffectBlendingModeBehindWindow)
-    # order matters: the band must sit above the sidebar so that, over the
-    # sidebar column, it blurs the sidebar's material (desktop shows through)
-    for view in (_SIDEBAR_VIEW, _BAND_VIEW):
+    # the sidebar sits below Qt (its column is transparent) while the
+    # band sits above Qt (the content panel under it is opaque)
+    for view, position in ((_SIDEBAR_VIEW, AppKit.NSWindowBelow),
+                           (_BAND_VIEW, AppKit.NSWindowAbove)):
         try:
             view.removeFromSuperview()
         except Exception:
             pass
-        theme.addSubview_positioned_relativeTo_(view, AppKit.NSWindowBelow,
-                                                qt_view)
+        theme.addSubview_positioned_relativeTo_(view, position, qt_view)
+    if not band_above_content(window):
+        _note('band order unexpected (should be above the content view, '
+              'below the titlebar chrome)')
     _place_band(nswin, theme)
     _place_sidebar(nswin, theme)
     _align_titlebar(nswin)
+    _debug_outlines()
     return '52 pt band + sidebar blur'
+
+
+def band_above_content(window):
+    """True when the band material is ordered above the Qt view - so the
+    opaque content panel cannot hide it - but below the native titlebar
+    chrome, so it cannot hide the traffic lights and the title."""
+    if sys.platform != 'darwin' or _BAND_VIEW is None:
+        return False
+    try:
+        import objc
+        qt_view = objc.objc_object(c_void_p=int(window.winId()))
+        theme = qt_view.superview()
+        subs = list(theme.subviews())
+        if _BAND_VIEW not in subs or qt_view not in subs:
+            return False
+        band_i = subs.index(_BAND_VIEW)
+        if band_i <= subs.index(qt_view):
+            return False
+        return not any('Titlebar' in type(v).__name__ for v in subs[:band_i])
+    except Exception as exc:
+        _note('band order check failed: {}: {}'.format(
+            type(exc).__name__, exc))
+        return False
 
 
 def _place_band(nswin, theme):

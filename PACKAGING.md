@@ -103,12 +103,20 @@ PyInstaller 不支持跨平台编译, Windows/Linux 版本通过 CI 在对应系
 
 材质与模糊方式按 Finder 的做法区分 (见 Apple 文档 NSVisualEffectView
 BlendingMode): 标题栏右段 (侧栏右侧) 使用工具栏材质 (默认 headerView) 且
-blendingMode = withinWindow, 即只模糊窗口内部内容 —— 因其下方为不透明内容区,
-呈现为"其后有不透明层"的磨砂效果; 侧栏使用 sidebar 材质且
-blendingMode = behindWindow, 即模糊窗口背后的桌面, 呈半透明效果, 且该层
-覆盖侧栏整高 (含标题栏左侧区域), 因此红黄绿按钮与侧栏处于同一模糊层上,
-与侧栏之间无接缝. 可用环境变量 FORMAT_TEX_BAND_MATERIAL 覆盖色带材质
-(sidebar|headerView|titlebar|underWindowBackground) 以便对比.
+blendingMode = withinWindow, 即只模糊窗口内部内容 —— 该材质层位于 Qt 视图
+**之上** (其下方为不透明内容面板, 若放在 Qt 之下会被面板完全遮住而看不到任何
+材质), 因此呈现为"其后有不透明层"的磨砂效果; 该层为点击穿透
+(hitTest: 返回 nil), 不影响 Qt 控件交互. 侧栏使用 sidebar 材质且
+blendingMode = behindWindow, 位于 Qt 视图**之下** —— Qt 侧栏控件透明, 因此
+材质可见; 该层覆盖侧栏整高 (含标题栏左侧区域), 红黄绿按钮与侧栏处于同一模糊
+层上, 与侧栏之间无接缝.
+
+内容面板 (右侧) 使用系统原生窗口背景色 (NSColor.windowBackgroundColor),
+而不是 Qt 调色板的近似值; 标题栏右段与下方内容之间**没有分隔线**, 仅以材质与
+底色的差异区分 (与 Finder 一致). 可用环境变量 FORMAT_TEX_BAND_MATERIAL 覆盖
+色带材质 (sidebar|headerView|titlebar|underWindowBackground) 以便对比;
+设置 FORMAT_TEX_DEBUG=1 会为原生材质层 (标题带=红、侧栏=蓝) 与 Qt 内容面板
+绘制 1 px 轮廓, 便于用截图核对各区域边界.
 
 侧栏顶部为 macOS 设置风格的分组框 (圆角浅灰底, 两行之间为细分隔线):
 第一行左侧 "扩展名"、右侧为下拉按钮 (宽度自动适配其弹出菜单, 使弹出菜单与按钮
