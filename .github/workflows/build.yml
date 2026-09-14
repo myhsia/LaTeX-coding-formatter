@@ -39,9 +39,9 @@ jobs:
             ext: ''
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # the Windows arm64 image ships its own arm64 Python
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         if: ${{ !(runner.os == 'Windows' && runner.arch == 'ARM64') }}
         with:
           python-version: '3.12'
@@ -80,7 +80,7 @@ jobs:
           ls payload | head
       - name: Upload Windows MSI payload
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: msi-payload-${{ matrix.suffix }}
           path: payload/
@@ -114,29 +114,30 @@ jobs:
           ln -s /Applications dist/dmg/Applications
           cp dist/format-tex-macos-arm64 dist/dmg/bin/format-tex
           chmod +x dist/dmg/bin/format-tex
-          # macOS 26 deprecates `hdiutil create`; use its replacement.
-          # (hdiutil attach/detach below are not deprecated and are only
-          # used to verify the image really contains the payload.)
+          # verify the payload before it is sealed into the image
+          test -x dist/dmg/format-tex-gui.app/Contents/MacOS/format-tex-gui
+          test -x dist/dmg/bin/format-tex
+          test "$(readlink dist/dmg/Applications)" = "/Applications"
+          dist/dmg/bin/format-tex --help | head -1
+          # macOS 26 deprecates hdiutil entirely - create/attach/detach map
+          # to `diskutil image create from`, `diskutil image attach` and
+          # `diskutil eject` - so only current Apple tools are used here.
           rm -f dist/format-tex-gui-macos-arm64.dmg
-          if ! diskutil image create from --format UDZO \
-               --volumeName "LaTeX Coding Style Formatter" \
-               dist/dmg dist/format-tex-gui-macos-arm64.dmg; then
-            rm -f dist/format-tex-gui-macos-arm64.dmg
-            hdiutil create -volname "LaTeX Coding Style Formatter" \
-              -srcfolder dist/dmg -ov -format UDZO \
-              dist/format-tex-gui-macos-arm64.dmg
-          fi
+          diskutil image create from --format UDZO \
+            --volumeName "LaTeX Coding Style Formatter" \
+            dist/dmg dist/format-tex-gui-macos-arm64.dmg
           rm -rf dist/dmg
-          mkdir -p /tmp/dmgcheck
-          hdiutil attach -nobrowse -readonly -mountpoint /tmp/dmgcheck \
-            dist/format-tex-gui-macos-arm64.dmg
-          test -x /tmp/dmgcheck/format-tex-gui.app/Contents/MacOS/format-tex-gui
-          test -x /tmp/dmgcheck/bin/format-tex
-          /tmp/dmgcheck/bin/format-tex --help | head -1
-          hdiutil detach /tmp/dmgcheck
-          rmdir /tmp/dmgcheck
+          # mount-free verification of the finished image
+          diskutil image info dist/format-tex-gui-macos-arm64.dmg \
+            > /tmp/dmg_info.txt
+          head -3 /tmp/dmg_info.txt
+          grep -q "Image Format: UDZO" /tmp/dmg_info.txt
+          diskutil image info --plist dist/format-tex-gui-macos-arm64.dmg \
+            > /tmp/dmg_info.plist
+          grep -q "<string>UDZO</string>" /tmp/dmg_info.plist
+          test "$(stat -f%z dist/format-tex-gui-macos-arm64.dmg)" -gt 10000000
           ls -lh dist/*.dmg
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: format-tex-${{ matrix.suffix }}
           path: dist/*
@@ -145,8 +146,8 @@ jobs:
     needs: build
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Install WiX
@@ -169,7 +170,7 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "MSI version: $v"
       - name: Download Windows payloads
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: msi-payload-*
           path: payloads
@@ -245,7 +246,7 @@ jobs:
             }
             Write-Host "$($msi.Name): verified (version $product)"
           }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-msi
           path: dist-msi/*.msi
