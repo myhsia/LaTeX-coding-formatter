@@ -80,7 +80,7 @@ jobs:
           ls payload | head
       - name: Upload Windows MSI payload
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: msi-payload-${{ matrix.suffix }}
           path: payload/
@@ -127,7 +127,7 @@ jobs:
           hdiutil detach /tmp/dmgcheck
           rmdir /tmp/dmgcheck
           ls -lh dist/*.dmg
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: format-tex-${{ matrix.suffix }}
           path: dist/*
@@ -236,7 +236,7 @@ jobs:
             }
             Write-Host "$($msi.Name): verified (version $product)"
           }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-msi
           path: dist-msi/*.msi
