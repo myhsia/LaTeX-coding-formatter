@@ -75,7 +75,8 @@ jobs:
             $PYINSTALLER_EXCLUDES format_tex_gui.py
           mkdir -p payload
           cp -R dist-onedir/format-tex-gui/. payload/
-          cp "dist/format-tex-${{ matrix.suffix }}.exe" payload/
+          # install the CLI under a platform-neutral name
+          cp "dist/format-tex-${{ matrix.suffix }}.exe" payload/format-tex.exe
           ls payload | head
       - name: Upload Windows MSI payload
         if: runner.os == 'Windows'
