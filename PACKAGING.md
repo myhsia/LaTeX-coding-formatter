@@ -99,6 +99,20 @@ PyInstaller 不支持跨平台编译, Windows/Linux 版本通过 CI 在对应系
   `diskutil image create from`, `detach`→`diskutil eject` 等), 因此仓库内
   已不再使用 `hdiutil`; 本方案只依赖 `diskutil image` (macOS 26 起可用).
 
+### macOS 菜单与快捷键
+
+* 菜单栏由 Qt 的 `QMenuBar` 提供 (显示在系统菜单栏), 含三组菜单:
+  **File ▸ Close (⌘W)**、**Edit** (Undo ⌘Z / Redo ⇧⌘Z / Cut ⌘X / Copy ⌘C /
+  Paste ⌘V / Delete / Select All ⌘A, 按当前焦点控件自动置灰, 例如只读的
+  差异面板只启用 Copy 与 Select All)、**Window ▸ Minimize (⌘M) / Zoom /
+  Bring All to Front**; 应用菜单 (About/Services/Hide/**Quit ⌘Q**) 由 Qt
+  自动提供. Minimize/Zoom/Bring All to Front 调用 AppKit 原生命令
+  (`performMiniaturize:`/`performZoom:`/`arrangeInFront:`, 与红黄绿按钮同源),
+  失败时回退到 Qt.
+* 此前没有任何 Close 命令, 因此 macOS 的 ⌘W 无人处理 (只有 ⌘Q 生效);
+  现在 ⌘W 与红色关闭按钮走同一条 Qt 关闭流程, 关闭最后一个窗口即退出
+  (与计算器等单窗口工具一致, `quitOnLastWindowClosed` 保持默认 True).
+
 ### macOS 外观与 SDK 标记
 
 * PyInstaller 使用预编译的 bootloader, 因此我们的可执行文件默认带的是很旧的

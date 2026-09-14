@@ -181,6 +181,53 @@ def set_sidebar_width(width):
         _SIDEBAR_WIDTH = 0.0
 
 
+def _nswindow(window):
+    import objc
+    return objc.objc_object(c_void_p=int(window.winId())).window()
+
+
+def minimize_window(window):
+    """Run the native minimise command (the yellow button's action), so
+    the menu item behaves exactly like the traffic light. Returns False
+    when unavailable, letting the caller fall back to Qt."""
+    if sys.platform != 'darwin':
+        return False
+    try:
+        _nswindow(window).performMiniaturize_(None)
+        return True
+    except Exception as exc:
+        _note('native minimize failed: {}: {}'.format(
+            type(exc).__name__, exc))
+        return False
+
+
+def zoom_window(window):
+    """Run the native zoom command (the green button's action). Returns
+    False when unavailable."""
+    if sys.platform != 'darwin':
+        return False
+    try:
+        _nswindow(window).performZoom_(None)
+        return True
+    except Exception as exc:
+        _note('native zoom failed: {}: {}'.format(type(exc).__name__, exc))
+        return False
+
+
+def arrange_in_front(window):
+    """Bring all of the app's windows to the front (the Window menu's
+    standard 'Bring All to Front'). Returns False when unavailable."""
+    if sys.platform != 'darwin':
+        return False
+    try:
+        import AppKit
+        AppKit.NSApp().arrangeInFront_(None)
+        return True
+    except Exception as exc:
+        _note('arrangeInFront failed: {}: {}'.format(type(exc).__name__, exc))
+        return False
+
+
 def debug_enabled():
     """FORMAT_TEX_DEBUG=1 outlines the native material views so frames can
     be verified from a screenshot."""

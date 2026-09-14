@@ -21,8 +21,9 @@ from pathlib import Path
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, \
     QTimer, QUrl, Qt
-from PySide6.QtGui import QColor, QDropEvent, QFont, QFontDatabase, \
-    QFontMetrics, QPalette, QTextCharFormat, QTextCursor
+from PySide6.QtGui import QAction, QColor, QDropEvent, QFont, \
+    QFontDatabase, QFontMetrics, QKeySequence, QPalette, \
+    QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
                                QComboBox, QFileDialog, QFrame, QHBoxLayout,
                                QInputDialog, QLabel, QListWidget,
@@ -34,17 +35,19 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
 from format_tex import FormatOptions, format_file, scan_directory
 from native_menu import (CUSTOM_SENTINEL, build_menu, menu_entries,
                          popup_native_menu)
-from platform_effects import (apply_effects, band_above_content,
+from platform_effects import (apply_effects, arrange_in_front,
+                              band_above_content,
                               band_height, band_material_name,
                               create_native_switch, debug_enabled,
                               has_native_switch, last_material_view,
                               last_sidebar_view, last_title_view,
                               lights_inset,
                               native_switch_state, native_switch_view,
-                              native_window_color, notes,
+                              minimize_window, native_window_color,
+                              notes,
                               place_native_switch, prepare_qt,
                               reposition_materials, set_sidebar_width,
-                              title_gap)
+                              title_gap, zoom_window)
 
 ENCODINGS = ['同输入', 'utf-8', 'gb18030', 'gbk', 'gb2312', 'big5',
              'utf-16', 'latin-1']
@@ -456,6 +459,8 @@ class MainWindow(QMainWindow):
         self._effects_applied = False
         self._notes_seen = 0
         prepare_qt(self)
+        # menus last: creating the menu bar triggers window events
+        self._build_menus()
 
     # ---------- helpers ----------
 
@@ -476,6 +481,118 @@ class MainWindow(QMainWindow):
     def _splitter_moved(self, *_args):
         self._sync_sidebar_width()
         reposition_materials(self)
+
+    def _build_menus(self):
+        """macOS menu bar, so the standard shortcuts work and are
+        discoverable: File (Close, Cmd+W), Edit (the standard editing
+        commands) and Window (Minimize Cmd+M, Zoom, Bring All to Front).
+        Qt supplies the application menu (About/Services/Hide/Quit Cmd+Q)
+        automatically. Before this there was no Close command anywhere, so
+        Cmd+W silently did nothing and only Cmd+Q worked."""
+        bar = self.menuBar()
+        bar.setNativeMenuBar(True)
+
+        def action(menu, text, key, slot, std=False):
+            item = QAction(text, self)
+            if std:
+                item.setShortcut(QKeySequence(key))
+            elif key is not None:
+                item.setShortcut(key)
+            # keep Qt from relocating items into the application menu
+            item.setMenuRole(QAction.MenuRole.NoRole)
+            item.triggered.connect(slot)
+            menu.addAction(item)
+            return item
+
+        # --- File ---
+        file_menu = bar.addMenu('&File')
+        self.action_close = action(file_menu, 'Close',
+                                   QKeySequence.StandardKey.Close,
+                                   self.close, std=True)
+
+        # --- Edit ---
+        edit_menu = bar.addMenu('&Edit')
+        self.edit_actions = {}
+
+        def focused():
+            return QApplication.focusWidget()
+
+        def call(method):
+            def run(*_args):
+                widget = focused()
+                fn = getattr(widget, method, None)
+                if callable(fn):
+                    fn()
+            return run
+
+        def delete_selection(*_args):
+            widget = focused()
+            cursor = getattr(widget, 'textCursor', lambda: None)()
+            if cursor is not None and cursor.hasSelection():
+                cursor.removeSelectedText()
+
+        specs = (('Undo', QKeySequence.StandardKey.Undo, call('undo')),
+                 ('Redo', QKeySequence.StandardKey.Redo, call('redo')),
+                 (None, None, None),
+                 ('Cut', QKeySequence.StandardKey.Cut, call('cut')),
+                 ('Copy', QKeySequence.StandardKey.Copy, call('copy')),
+                 ('Paste', QKeySequence.StandardKey.Paste, call('paste')),
+                 ('Delete', None, delete_selection),
+                 (None, None, None),
+                 ('Select All', QKeySequence.StandardKey.SelectAll,
+                  call('selectAll')))
+        for text, key, slot in specs:
+            if text is None:
+                edit_menu.addSeparator()
+                continue
+            self.edit_actions[text] = action(edit_menu, text, key, slot)
+        edit_menu.aboutToShow.connect(self._sync_edit_menu)
+
+        # --- Window ---
+        window_menu = bar.addMenu('&Window')
+        self.action_minimize = action(window_menu, 'Minimize', 'Ctrl+M',
+                                      self._minimize)
+        self.action_zoom = action(window_menu, 'Zoom', None, self._zoom)
+        self.action_front = action(window_menu, 'Bring All to Front', None,
+                                   self._bring_all_to_front)
+        return bar
+
+    def _sync_edit_menu(self):
+        """Grey out the editing commands the focused widget cannot do
+        (e.g. Cut/Paste on the read-only diff pane), like native apps."""
+        widget = QApplication.focusWidget()
+
+        def has(name):
+            return widget is not None and callable(getattr(widget, name, None))
+
+        read_only = bool(getattr(widget, 'isReadOnly', lambda: False)())
+        undoable = getattr(widget, 'isUndoAvailable', lambda: True)()
+        redoable = getattr(widget, 'isRedoAvailable', lambda: True)()
+        state = {
+            'Undo': has('undo') and undoable and not read_only,
+            'Redo': has('redo') and redoable and not read_only,
+            'Cut': has('cut') and not read_only,
+            'Copy': has('copy'),
+            'Paste': has('paste') and not read_only,
+            'Delete': has('textCursor') and not read_only,
+            'Select All': has('selectAll'),
+        }
+        for name, enabled in state.items():
+            self.edit_actions[name].setEnabled(bool(enabled))
+
+    def _minimize(self):
+        if not minimize_window(self):
+            self.showMinimized()
+
+    def _zoom(self):
+        if not zoom_window(self):
+            if self.isMaximized():
+                self.showNormal()
+            else:
+                self.showMaximized()
+
+    def _bring_all_to_front(self):
+        arrange_in_front(self)
 
     def _sync_sidebar_width(self):
         """Tell the native layer where the sidebar ends: the boundary is
@@ -982,6 +1099,31 @@ class MainWindow(QMainWindow):
                 placeholder_hidden))
             ok = ok and gained >= 2 and placeholder_hidden
             shutil.rmtree(drop_dir, ignore_errors=True)
+
+            # --- menu bar: standard commands, so Cmd+W etc. work ---
+            menus = [a.text().replace('&', '')
+                     for a in self.menuBar().actions()]
+            want_keys = {'Undo': 'Ctrl+Z', 'Redo': 'Ctrl+Shift+Z',
+                         'Cut': 'Ctrl+X', 'Copy': 'Ctrl+C',
+                         'Paste': 'Ctrl+V', 'Select All': 'Ctrl+A'}
+            close_key = QKeySequence(QKeySequence.StandardKey.Close)
+            menu_ok = (menus[:3] == ['File', 'Edit', 'Window']
+                       and len(menus) == len(set(menus))
+                       and self.action_close.shortcut() == close_key
+                       and self.action_minimize.shortcut().toString()
+                       == 'Ctrl+M'
+                       and set(self.edit_actions)
+                       == set(want_keys) | {'Delete'}
+                       and all(self.edit_actions[n].shortcut().toString() == k
+                               for n, k in want_keys.items()))
+            lines.append('menu bar File/Edit/Window, Close {} ({}), Minimize '
+                         '{}: {}'.format(
+                             self.action_close.shortcut().toString(),
+                             'std' if close_key.toString() == 'Ctrl+W'
+                             else '?',
+                             self.action_minimize.shortcut().toString(),
+                             menu_ok))
+            ok = ok and menu_ok
         except Exception as exc:
             lines.append('self-test exception: {}: {}'.format(
                 type(exc).__name__, exc))
@@ -992,6 +1134,24 @@ class MainWindow(QMainWindow):
                 result + '\n' + '\n'.join(lines) + '\n', encoding='utf-8')
         except Exception:
             pass
+        # the File > Close command must really close the window (this is
+        # checked last: it hides the window the other checks need)
+        try:
+            self.action_close.trigger()
+            QApplication.processEvents()
+            close_works = not self.isVisible()
+        except Exception as exc:
+            close_works = False
+            lines.append('close trigger exception: {}: {}'.format(
+                type(exc).__name__, exc))
+        if not close_works:
+            ok = False
+            lines.append('File > Close closes the window: False')
+            try:
+                Path('format_tex_gui_selftest.txt').write_text(
+                    'FAIL\n' + '\n'.join(lines) + '\n', encoding='utf-8')
+            except Exception:
+                pass
         return ok
 
     def log_path(self):
