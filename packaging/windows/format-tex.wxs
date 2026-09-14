@@ -24,7 +24,7 @@
 
     <StandardDirectory Id="LocalAppDataFolder">
       <Directory Id="INSTALLFOLDER" Name="LaTeX Coding Style Formatter">
-        <Files Include="$(var.PayloadDir)\**" />
+        <Files Include="$(var.PayloadDir)\**\*" />
       </Directory>
     </StandardDirectory>
 

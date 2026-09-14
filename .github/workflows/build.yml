@@ -143,15 +143,22 @@ jobs:
       - name: Build MSIs (per-user, x64 + arm64)
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path dist-msi | Out-Null
           foreach ($a in @(@{suffix='windows-x86_64'; arch='x64'},
                            @{suffix='windows-arm64';  arch='arm64'})) {
             $payload = (Resolve-Path "payloads/msi-payload-$($a.suffix)").Path
-            wix build packaging/windows/format-tex.wxs -arch $($a.arch) `
+            $count = (Get-ChildItem -Recurse -File $payload | Measure-Object).Count
+            Write-Host "== $($a.suffix) (arch $($a.arch)): payload $payload, $count files"
+            & wix build packaging/windows/format-tex.wxs -arch $($a.arch) `
               -acceptEula wix7 `
               -d PayloadDir="$payload" `
               -d Version="${{ steps.ver.outputs.version }}" `
-              -o "dist-msi/format-tex-$($a.suffix).msi"
+              -o "dist-msi/format-tex-$($a.suffix).msi" 2>&1 |
+              ForEach-Object { Write-Host "   wix: $_" }
+            if ($LASTEXITCODE -ne 0) {
+              throw "wix build failed for $($a.suffix) (exit $LASTEXITCODE)"
+            }
           }
       - name: Verify MSI contents
         shell: pwsh
@@ -176,6 +183,9 @@ jobs:
             $prec = $pview.Fetch()
             $product = $prec.StringData(1)
             $pview.Close()
+            Write-Host ("{0}: {1} files, version {2}; first: {3}" -f
+              $msi.Name, $names.Count, $product,
+              (($names | Select-Object -First 5) -join ', '))
             $missing = $expected | Where-Object { $names -notcontains $_ }
             if ($missing) {
               throw "$($msi.Name): missing $($missing -join ', ')"
