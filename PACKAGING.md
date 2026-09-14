@@ -90,7 +90,7 @@ PyInstaller 不支持跨平台编译, Windows/Linux 版本通过 CI 在对应系
   创建前先在暂存目录里校验 payload (应用可执行文件、`bin/format-tex` 可执行
   并实际运行 `--help`、`Applications` 替身指向 `/Applications`), 创建后用
   `diskutil image info` (含 `--plist`) 校验镜像格式与大小, 全程不挂载.
-  由于 `.app` 在 CI 中先经过 SDK 26 标记补丁 (`macos_patch_sdk.sh`),
+  由于 `.app` 在 CI 中先经过 SDK 27.0 标记补丁 (`macos_patch_sdk.sh`),
   镜像内的应用保留 Liquid Glass 外观.
 * 应用未签名/未公证, 首次打开请右键选择"打开", 或执行
   `xattr -dr com.apple.quarantine /Applications/format-tex-gui.app`.
@@ -98,6 +98,20 @@ PyInstaller 不支持跨平台编译, Windows/Linux 版本通过 CI 在对应系
   `diskutil image` (`attach`→`diskutil image attach`, `create -srcfolder`→
   `diskutil image create from`, `detach`→`diskutil eject` 等), 因此仓库内
   已不再使用 `hdiutil`; 本方案只依赖 `diskutil image` (macOS 26 起可用).
+
+### macOS 外观与 SDK 标记
+
+* PyInstaller 使用预编译的 bootloader, 因此我们的可执行文件默认带的是很旧的
+  SDK 标记 (实测 `sdk 12.1`), 与构建机无关. macOS 对 SDK 较旧的主可执行文件
+  渲染旧式标题栏/红黄绿按钮, 所以 `macos_patch_sdk.sh` 用 `vtool` 把
+  `LC_BUILD_VERSION` 的 sdk 改写为 **27.0** 并 ad-hoc 重新签名, 以启用
+  Liquid Glass 外观; `minos` 保持 11.0, 旧系统仍可运行.
+* 目标版本固定为 27.0, 可用 `MACOS_SDK_TARGET` 覆盖 (例如设 26.0 做对照).
+  `vtool` 本身不校验版本号, 因此 CI 同时把 macOS 构建作业放在 GitHub 的
+  `xcode-27` 镜像上 (macOS 27 + Xcode 27, 内含 macOS 27.0 SDK), 并在作业内
+  断言 `xcrun --show-sdk-version --sdk macosx` 等于 27.0 —— 不是凭空写一个数字.
+* 注: `xcode-27` 目前是 GitHub 的 preview 镜像 (可能有排队/不稳定), 待 macOS 27
+  正式 GA 后可直接换回 `macos-latest`.
 
 ## 使用方法
 

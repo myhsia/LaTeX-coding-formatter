@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
-# Patch the macOS GUI executables to claim the SDK that introduced the
-# Liquid Glass design (macOS 26). macOS 26+ renders the legacy title
-# bar / traffic lights for apps whose main executable is linked against
-# an older SDK, regardless of the code. Patching LC_BUILD_VERSION and
-# re-signing ad-hoc opts the app into the modern appearance.
+# Patch the macOS GUI executables to claim the macOS 27.0 SDK.
+#
+# Why this is needed: PyInstaller ships a prebuilt bootloader, so our
+# binaries inherit an ancient SDK claim (measured: sdk 12.1) regardless of
+# the toolchain used. macOS renders the legacy title bar / traffic lights
+# for apps whose main executable is linked against an older SDK, so the
+# modern (Liquid Glass) appearance is gated on the LC_BUILD_VERSION sdk
+# field. Patching it to the current SDK and re-signing ad-hoc opts the app
+# into the modern appearance without changing minos (11.0). vtool does not
+# validate the number, so CI also installs the macOS 27 SDK (GitHub's
+# `xcode-27` image) and asserts xcrun reports 27.0.
 #
 # Usage: ./macos_patch_sdk.sh [dist_dir]   (default: ./dist)
+#        MACOS_SDK_TARGET=26.0 to opt down (e.g. to test older macOS).
 #        No-op on non-macOS. Idempotent.
 set -euo pipefail
 
@@ -15,8 +22,14 @@ if [[ "$(uname)" != "Darwin" ]]; then
 fi
 
 DIST="${1:-./dist}"
-SDK_TARGET="${MACOS_SDK_TARGET:-26.0}"
+SDK_TARGET="${MACOS_SDK_TARGET:-27.0}"
 MINOS="${MACOS_MINOS:-11.0}"
+
+# informational: what SDK the active toolchain actually provides
+INSTALLED_SDK="$(xcrun --show-sdk-version --sdk macosx 2>/dev/null || true)"
+if [[ -n "$INSTALLED_SDK" && "$INSTALLED_SDK" != "$SDK_TARGET" ]]; then
+    echo "note: claiming SDK $SDK_TARGET while the active SDK is $INSTALLED_SDK"
+fi
 
 VTOOL="$(command -v vtool || true)"
 [[ -z "$VTOOL" && -x "$(xcrun -f vtool 2>/dev/null)" ]] && VTOOL="$(xcrun -f vtool)"

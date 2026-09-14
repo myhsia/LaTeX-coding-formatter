@@ -31,7 +31,10 @@ jobs:
           - os: windows-11-arm
             suffix: windows-arm64
             ext: .exe
-          - os: macos-latest
+          # GitHub's Xcode 27 image: macOS 27 with the macOS 27.0 SDK
+          # installed (Apple ships SDKs only inside Xcode/CLT, so the 27
+          # SDK cannot be obtained on the macOS 26 `macos-latest` image)
+          - os: xcode-27
             suffix: macos-arm64
             ext: ''
           - os: ubuntu-latest
@@ -46,6 +49,15 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install pyinstaller chardet PySide6-Essentials
+      - name: Record macOS toolchain (macOS 27.0 SDK required)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          sw_vers
+          xcodebuild -version 2>/dev/null || true
+          SDK="$(xcrun --show-sdk-version --sdk macosx)"
+          echo "macOS SDK: $SDK"
+          test "$SDK" = "27.0"
       - name: Install macOS native-effect deps
         if: runner.os == 'macOS'
         run: python -m pip install pyobjc-framework-Cocoa
@@ -86,11 +98,14 @@ jobs:
           path: payload/
       - name: Patch macOS SDK claim (opt into Liquid Glass appearance)
         if: runner.os == 'macOS'
+        env:
+          MACOS_SDK_TARGET: '27.0'
         shell: bash
         run: |
           chmod +x macos_patch_sdk.sh
           ./macos_patch_sdk.sh dist
-          vtool -show-build dist/format-tex-gui-macos-arm64 | grep 'sdk 26.0'
+          vtool -show-build dist/format-tex-gui-macos-arm64 \
+            | grep "sdk ${MACOS_SDK_TARGET}"
       - name: Smoke test CLI
         shell: bash
         run: |
