@@ -51,6 +51,7 @@ _PLUS_MINUS_TARGET = None
 _PLUS_MINUS_TARGET_CLASS = None
 _FOOTER_VIEW = None
 _FOOTER_SLOT = None
+_FOOTER_ROW = None
 _PLUS_MINUS_SLOT = None
 
 
@@ -273,11 +274,12 @@ def footer_material_name():
                           'headerView').strip()
 
 
-def create_footer_strip(window, slot):
+def create_footer_strip(window, frame_widget, row_widget):
     """A native material strip behind the list's +/- row, so the footer
-    reads like a Settings pane's footer rather than a flat tint. Sits
-    BELOW the Qt view (the Qt row is transparent), with its bottom
-    corners rounded to follow the list frame. Returns True on success."""
+    reads like a Settings pane's footer rather than a flat tint. Anchored
+    to the frame's inner bottom band (square top edge under the hairline,
+    bottom corners rounded to match the frame), and placed BELOW the Qt
+    view, which is transparent there. Returns True on success."""
     global _FOOTER_VIEW
     if sys.platform != 'darwin':
         return False
@@ -306,7 +308,7 @@ def create_footer_strip(window, slot):
             pass
         theme.addSubview_positioned_relativeTo_(_FOOTER_VIEW,
                                                AppKit.NSWindowBelow, qt_view)
-        place_footer_strip(window, slot)
+        place_footer_strip(window, frame_widget, row_widget)
         return True
     except Exception as exc:
         _note('native footer strip failed: {}: {}'.format(
@@ -314,24 +316,38 @@ def create_footer_strip(window, slot):
         return False
 
 
-def place_footer_strip(window, slot):
-    """Fit the footer strip to the Qt ``slot`` widget (the bar row)."""
-    global _FOOTER_SLOT
-    if sys.platform != 'darwin' or _FOOTER_VIEW is None or slot is None:
+def place_footer_strip(window, frame_widget, row_widget=None, inset=1.0):
+    """Span the frame's inner bottom band: same width as the frame's
+    inner area, as tall as the +/- row, bottom-aligned one inset above
+    the frame bottom - so the strip's rounded bottom corners coincide
+    with the frame's rounded border and its top edge is level under the
+    hairline (the native Settings.app footer shape).
+
+    The height is read from ``row_widget`` every time (never cached), so
+    it cannot go stale when the row's height changes."""
+    global _FOOTER_SLOT, _FOOTER_ROW
+    if sys.platform != 'darwin' or _FOOTER_VIEW is None or frame_widget is None:
         return
-    _FOOTER_SLOT = slot
+    if row_widget is not None:
+        _FOOTER_ROW = row_widget
+    row_widget = _FOOTER_ROW
+    height = (float(row_widget.height()) if row_widget is not None
+              else float(frame_widget.height()))
+    _FOOTER_SLOT = frame_widget
     try:
         import objc
         from PySide6.QtCore import QPoint
 
         qt_view = objc.objc_object(c_void_p=int(window.winId()))
         theme = qt_view.superview()
-        top_left = slot.mapTo(window, QPoint(0, 0))
+        top_left = frame_widget.mapTo(
+            window, QPoint(int(inset),
+                           int(frame_widget.height() - inset - height)))
         rect = ((float(top_left.x()), float(top_left.y())),
-                (float(slot.width()), float(slot.height())))
+                (float(frame_widget.width() - 2 * inset), float(height)))
         target = qt_view.convertRect_toView_(rect, theme)
         _FOOTER_VIEW.setFrame_((target.origin, target.size))
-        _FOOTER_VIEW.setHidden_(slot.isVisible() is False)
+        _FOOTER_VIEW.setHidden_(frame_widget.isVisible() is False)
     except Exception as exc:
         _note('footer strip placement failed: {}: {}'.format(
             type(exc).__name__, exc))
@@ -383,6 +399,8 @@ def create_native_plus_minus(window, on_add, on_remove):
             control = AppKit.NSSegmentedControl.alloc().init()
             control.setSegmentCount_(2)
             control.setSegmentStyle_(AppKit.NSSegmentStyleSeparated)
+            # small: the compact Settings-like size (21 pt)
+            control.setControlSize_(AppKit.NSControlSizeSmall)
             control.setTrackingMode_(AppKit.NSSegmentSwitchTrackingMomentary)
             for index, symbol in enumerate(('plus', 'minus')):
                 image = AppKit.NSImage                     .imageWithSystemSymbolName_accessibilityDescription_(
@@ -394,7 +412,7 @@ def create_native_plus_minus(window, on_add, on_remove):
                 control.setImage_forSegment_(image, index)
                 control.setImageScaling_forSegment_(
                     AppKit.NSImageScaleProportionallyDown, index)
-                control.setWidth_forSegment_(28.0, index)
+                control.setWidth_forSegment_(24.0, index)
             control.setTarget_(target)
             control.setAction_(b'segmentClicked:')
             control.sizeToFit()
@@ -435,6 +453,9 @@ def place_native_plus_minus(window, slot):
         size = _PLUS_MINUS.frame().size
         x = target.origin.x + 6.0
         y = target.origin.y + (target.size.height - size.height) / 2.0
+        # never leave the row (the control must stay inside the frame)
+        y = max(target.origin.y,
+                min(y, target.origin.y + target.size.height - size.height))
         _PLUS_MINUS.setFrame_(((x, y), (size.width, size.height)))
         _PLUS_MINUS.setHidden_(slot.isVisible() is False)
     except Exception as exc:
@@ -448,6 +469,17 @@ def set_native_plus_minus_enabled(remove_enabled):
             _PLUS_MINUS.setEnabled_forSegment_(bool(remove_enabled), 1)
     except Exception:
         pass
+
+
+def native_plus_minus_height():
+    """Height of the native +/- control in points (0 when absent), so the
+    Qt row can be sized from it instead of guessing."""
+    try:
+        if _PLUS_MINUS is not None:
+            return float(_PLUS_MINUS.frame().size.height)
+    except Exception:
+        pass
+    return 0.0
 
 
 def has_native_plus_minus():

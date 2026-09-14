@@ -184,10 +184,14 @@ secondary 标签色, 复现原生的"非活动变暗"行为 (实测活动态 #dd
 列表支持多选 (⌘/Ctrl 点选、⇧ 连选、⌘A 全选)。
 框内底部为 System Settings 风格的 **+ / −** 按钮条 (左侧): macOS 上使用
 **原生 `NSSegmentedControl`** (`NSSegmentStyleSeparated` + SF Symbols
-`plus`/`minus`, 因此字重与按下态都是系统原生观感, 且两段之间有原生分隔线),
-其后方是**原生材质条** (`NSVisualEffectView`, 默认 material `headerView`,
-可用 `FORMAT_TEX_FOOTER_MATERIAL` 覆盖为 `contentBackground` 等做对比),
-使该行像系统设置面板的页脚一样呈毛玻璃而非纯色填充; 其他平台回退为 Qt 按钮.
+`plus`/`minus`, **small 尺寸 21 pt**, 因此字重与按下态都是系统原生观感,
+两段之间有原生分隔线), 其后方是**原生材质条** (`NSVisualEffectView`,
+默认 material `headerView`, 可用 `FORMAT_TEX_FOOTER_MATERIAL` 覆盖为
+`contentBackground` 等做对比): 材质条**对齐列表边框内侧底边**
+(宽度=边框内宽, 底边距边框底 1 pt, 圆角半径与边框一致并只圆下面两角,
+顶边平接分隔线), 即系统设置面板页脚的原生处理方式, 而非纯色填充;
+`+`/`−` 控件始终被约束在该行之内 (不会越出边框);
+其他平台回退为 Qt 按钮.
 **+** 直接打开文件选择对话框, **−** 从列表移除**所选**条目 (无选中时置灰);
 列表为空时显示提示文字与 "选择文件/选择目录" 链接 (可拖入文件或文件夹)。
 右侧为不透明的内容面板 (选项复选框、输出编码、应用按钮、差异预览与状态栏)。

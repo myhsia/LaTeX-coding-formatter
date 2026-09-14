@@ -50,6 +50,9 @@ from platform_effects import (apply_effects, arrange_in_front,
                               last_sidebar_view, last_title_view,
                               lights_inset,
                               footer_strip_view, has_native_plus_minus,
+                              native_plus_minus_height,
+                              place_footer_strip,
+                              place_native_plus_minus,
                               native_plus_minus_view,
                               native_switch_state, native_switch_view,
                               minimize_window, native_window_color,
@@ -464,6 +467,12 @@ class MainWindow(QMainWindow):
                 QPalette.ColorRole.WindowText).name()))
         self.pm_bar = QWidget()
         self.pm_bar.setObjectName('plusminusbar')
+        # the row must fit the native control (small: 21 pt) plus a little
+        # breathing room; keep the same height on other platforms so the
+        # Qt fallback buttons look identical
+        self.pm_bar.setFixedHeight(
+            int(round(native_plus_minus_height())) + 8 if
+            native_plus_minus_height() else 28)
         bar = QHBoxLayout(self.pm_bar)
         bar.setContentsMargins(4, 2, 4, 2)
         bar.setSpacing(0)
@@ -492,6 +501,7 @@ class MainWindow(QMainWindow):
         bar.addStretch(1)
         flv.addWidget(self.pm_bar)
         self.file_frame = frame
+        frame.installEventFilter(self)
         slayout.addWidget(frame, 1)
         self.sidebar = sidebar
         splitter.addWidget(sidebar)
@@ -756,8 +766,15 @@ class MainWindow(QMainWindow):
         # the panel's width changes on splitter drags without a window
         # resize, and splitterMoved fires before the new sizes are
         # applied - so reflow from the panel's own resize event
-        if obj is self.content_panel and event.type() == QEvent.Type.Resize:
+        if (obj is getattr(self, 'content_panel', None)
+                and event.type() == QEvent.Type.Resize):
             self._reflow_options()
+        # the list frame / bar row move with the layout: the native footer
+        # strip and +/- control must follow, or they keep stale rects
+        if (obj in (getattr(self, 'file_frame', None),
+                    getattr(self, 'pm_bar', None))
+                and event.type() == QEvent.Type.Resize):
+            reposition_materials(self)
         return super().eventFilter(obj, event)
 
     def _sync_sidebar_width(self):
@@ -1374,15 +1391,38 @@ class MainWindow(QMainWindow):
                 strip = footer_strip_view()
                 images_ok = all(
                     control.imageForSegment_(i) is not None for i in (0, 1))
-                geom_ok = False
-                try:
-                    slot = self.pm_bar
-                    expected = slot.width()
-                    geom_ok = abs(control.frame().size.width) > 20 and                         abs(strip.frame().size.width - expected) < 3
-                except Exception:
-                    geom_ok = False
+
+                def theme_rect(widget, inset=0.0):
+                    tl = widget.mapTo(self, QPoint(int(inset), int(inset)))
+                    rect = ((float(tl.x()), float(tl.y())),
+                            (float(widget.width() - 2 * inset),
+                             float(widget.height() - 2 * inset)))
+                    return qt_view.convertRect_toView_(rect, theme)
+
+                def inside(inner, outer):
+                    return (inner.origin.x >= outer.origin.x - 0.5
+                            and inner.origin.y >= outer.origin.y - 0.5
+                            and inner.origin.x + inner.size.width
+                            <= outer.origin.x + outer.size.width + 0.5
+                            and inner.origin.y + inner.size.height
+                            <= outer.origin.y + outer.size.height + 0.5)
+
+                # the control must sit inside the strip, and the strip
+                # inside the frame's inner bottom band; re-check after a
+                # resize, because stale native rects are exactly the bug
+                # this guards against
+                contained = (inside(control.frame(), strip.frame())
+                             and inside(strip.frame(),
+                                        theme_rect(self.file_frame, 1.0)))
+                self.resize(self.width() + 40, self.height() + 30)
+                QApplication.processEvents()
+                contained = (contained
+                             and inside(control.frame(), strip.frame())
+                             and inside(strip.frame(),
+                                        theme_rect(self.file_frame, 1.0)))
+                small_ok = native_plus_minus_height() <= 22
                 buttons_ok = (control.segmentCount() == 2 and images_ok
-                              and strip is not None and geom_ok
+                              and strip is not None and contained and small_ok
                               and not self.btn_add.isVisible())
                 native_note = 'native NSSegmentedControl + footer strip'
             else:
@@ -1593,9 +1633,18 @@ class MainWindow(QMainWindow):
         NSSegmentedControl (separated style, SF Symbols) above it; the Qt
         buttons stay as the fallback on other platforms."""
         try:
-            strip = create_footer_strip(self, self.pm_bar)
             control = create_native_plus_minus(self, self.add_files,
                                                self._remove_selected)
+            if control and native_plus_minus_height():
+                # size the row to the control that was really built
+                height = int(round(native_plus_minus_height())) + 8
+                if height != self.pm_bar.height():
+                    self.pm_bar.setFixedHeight(height)
+            strip = create_footer_strip(self, self.file_frame, self.pm_bar)
+            # the control is inserted unpositioned: place it (and keep it
+            # placed through reposition_materials on every layout change)
+            if control:
+                place_native_plus_minus(self, self.pm_bar)
         except Exception:
             strip = control = False
         if strip and control:
