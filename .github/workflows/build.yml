@@ -176,7 +176,6 @@ jobs:
             $prec = $pview.Fetch()
             $product = $prec.StringData(1)
             $pview.Close()
-            $db.Close()
             $missing = $expected | Where-Object { $names -notcontains $_ }
             if ($missing) {
               throw "$($msi.Name): missing $($missing -join ', ')"
