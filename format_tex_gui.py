@@ -19,19 +19,21 @@ import sys
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, \
-    QTimer, QUrl, Qt
+from PySide6.QtCore import QEvent, QFileInfo, QPoint, QPointF, QRect, \
+    QSize, QTimer, QUrl, Qt
 from PySide6.QtGui import QAction, QColor, QDropEvent, QFont, \
     QFontDatabase, QFontMetrics, QKeySequence, QPalette, \
     QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
-                               QComboBox, QFileDialog, QFrame, QGridLayout,
+                               QComboBox, QFileDialog, QFileIconProvider,
+                               QFrame, QGridLayout,
                                QHBoxLayout,
                                QInputDialog, QLabel, QListWidget,
                                QListWidgetItem,
                                QMainWindow, QMessageBox, QPlainTextEdit,
                                QPushButton, QSplitter, QStyle,
-                               QStyleOptionComboBox, QVBoxLayout,
+                               QStyledItemDelegate, QStyleOptionComboBox,
+                               QStyleOptionViewItem, QVBoxLayout,
                                QWidget)
 
 from format_tex import (FormatOptions, backup_path, format_file,
@@ -77,6 +79,75 @@ def detect_dark(app):
             return False
 
 
+ROLE_PATH = Qt.ItemDataRole.UserRole          # full path of the row
+ROLE_ROOT = Qt.ItemDataRole.UserRole + 1      # scanned root for backups
+
+SEPARATOR = QColor(120, 120, 128, 60)         # hairline between rows
+SELECTION_TINT = QColor(120, 120, 128, 30)    # hover tint
+
+
+class FileRowDelegate(QStyledItemDelegate):
+    """Finder / System Settings style rows in the file list: the native
+    file icon, the file name (full path lives in the tooltip), a hairline
+    separator under each row and, for selected rows, a full-width bar in
+    the system accent colour (dimmed while the window is inactive).
+
+    A delegate is used rather than a stylesheet because stylesheet item
+    backgrounds are not captured by QWidget.grab(), so they cannot be
+    verified; painting here also gives the exact square bar and hairlines
+    the reference UI has."""
+
+    ROW_HEIGHT = 30
+    ICON = 16
+
+    def sizeHint(self, option, index):
+        size = super().sizeHint(option, index)
+        return QSize(size.width(), self.ROW_HEIGHT)
+
+    def paint(self, painter, option, index):
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        painter.save()
+        rect = opt.rect
+        selected = bool(opt.state & QStyle.StateFlag.State_Selected)
+        active = bool(opt.state & QStyle.StateFlag.State_Active)
+        text_color = opt.palette.color(QPalette.ColorRole.Text)
+        if selected:
+            accent = QColor(opt.palette.color(QPalette.ColorRole.Highlight))
+            if not active:              # native: dim while unfocused
+                accent = QColor(accent.red(), accent.green(),
+                                accent.blue(), 140)
+            painter.fillRect(rect, accent)
+            text_color = opt.palette.color(QPalette.ColorRole.HighlightedText)
+        elif opt.state & QStyle.StateFlag.State_MouseOver:
+            painter.fillRect(rect, SELECTION_TINT)
+
+        left = rect.left() + 8
+        if not opt.icon.isNull():
+            pixmap = opt.icon.pixmap(self.ICON, self.ICON)
+            painter.drawPixmap(left, rect.top() + (rect.height() - self.ICON) // 2,
+                               pixmap)
+            left += self.ICON + 8
+
+        # hairline under every row except the last (the bar has its own)
+        if index.row() < index.model().rowCount() - 1:
+            painter.setPen(SEPARATOR)
+            y = rect.bottom()
+            painter.drawLine(rect.left() + 8, y, rect.right() - 8, y)
+
+        metrics = QFontMetrics(opt.font)
+        text_rect = QRect(left, rect.top(),
+                          max(0, rect.right() - 6 - left), rect.height())
+        painter.setPen(text_color)
+        painter.drawText(text_rect,
+                         Qt.AlignmentFlag.AlignVCenter
+                         | Qt.AlignmentFlag.AlignLeft,
+                         metrics.elidedText(opt.text,
+                                            Qt.TextElideMode.ElideMiddle,
+                                            text_rect.width()))
+        painter.restore()
+
+
 class DropListWidget(QListWidget):
     """File list that accepts dragged files and folders.
 
@@ -99,16 +170,8 @@ class DropListWidget(QListWidget):
         playout.setContentsMargins(12, 12, 12, 12)
         playout.setSpacing(6)
 
-        self._plus = QLabel('+')
-        plus_font = self._plus.font()
-        plus_font.setPointSize(54)
-        plus_font.setWeight(QFont.Weight.Light)
-        self._plus.setFont(plus_font)
-        self._plus.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        playout.addStretch(1)
         muted = self.palette().color(QPalette.ColorRole.PlaceholderText)
-        self._plus.setStyleSheet('color: {};'.format(muted.name()))
-        playout.addWidget(self._plus)
-
         self._hint = QLabel('Click or drag and drop files/folders '
                             'into the box')
         self._hint.setWordWrap(True)
@@ -125,6 +188,7 @@ class DropListWidget(QListWidget):
         self._links.setTextInteractionFlags(
             Qt.TextInteractionFlag.LinksAccessibleByMouse)
         playout.addWidget(self._links, 0, Qt.AlignmentFlag.AlignHCenter)
+        playout.addStretch(1)
 
         # The placeholder covers the viewport, so it must accept drops
         # and forward them to the list's own handlers.
@@ -356,31 +420,73 @@ class MainWindow(QMainWindow):
         gv.addLayout(rec_row)
         slayout.addWidget(group)
 
-        self.btn_clear = QPushButton('清空列表')
-        self.btn_clear.clicked.connect(self.clear_files)
-        slayout.addWidget(self.btn_clear)
+        # --- framed file list with a +/- bar (System Settings style) ---
         self.file_list = DropListWidget(self.drop_paths, self.add_files,
                                         self.scan_dir)
-        # the list itself stays transparent over the sidebar material, but
-        # selected rows are highlighted (Finder-like tint); multi-select:
-        # Cmd-click toggles, Shift-click extends a range
         self.file_list.setSelectionMode(
             QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.file_list.setItemDelegate(FileRowDelegate(self.file_list))
+        self.file_list.setMouseTracking(True)
         self.file_list.setStyleSheet(
-            'QListWidget {{ background: transparent; }}'
-            'QListWidget::item {{ background: transparent;'
-            ' padding: 4px 6px; border-radius: 6px; }}'
-            'QListWidget::item:hover {{'
-            ' background: rgba(120, 120, 128, 0.12); }}'
-            'QListWidget::item:selected {{'
-            ' background: rgba(120, 120, 128, 0.32);'
-            ' color: {}; }}'
-            'QListWidget::item:selected:!active {{'
-            ' background: rgba(120, 120, 128, 0.16); }}'.format(
-                self.palette().color(QPalette.ColorRole.WindowText).name()))
+            'QListWidget { background: transparent; }')
         self.file_list.viewport().setAutoFillBackground(False)
         self.file_list.itemSelectionChanged.connect(self._preview_selection)
-        slayout.addWidget(self.file_list, 1)
+        self.file_list.itemSelectionChanged.connect(self._sync_list_buttons)
+
+        frame = QFrame()
+        frame.setObjectName('fileframe')
+        frame.setStyleSheet(
+            '#fileframe { border: 1px solid rgba(120, 120, 128, 0.28);'
+            ' border-radius: 8px;'
+            ' background: rgba(120, 120, 128, 0.06); }')
+        flv = QVBoxLayout(frame)
+        flv.setContentsMargins(1, 1, 1, 1)
+        flv.setSpacing(0)
+        flv.addWidget(self.file_list, 1)
+        barsep = QFrame()
+        barsep.setObjectName('listbarsep')
+        barsep.setFixedHeight(1)
+        barsep.setStyleSheet(
+            '#listbarsep { background: rgba(120, 120, 128, 0.28); }')
+        flv.addWidget(barsep)
+
+        button_qss = (
+            'QPushButton {{ border: none; background: transparent;'
+            ' color: {}; font-size: 16px; padding: 0px; }}'
+            'QPushButton:hover {{ background: rgba(120, 120, 128, 0.20);'
+            ' border-radius: 4px; }}'
+            'QPushButton:disabled {{ color: rgba(120, 120, 128, 0.45); }}'
+            .format(self.palette().color(
+                QPalette.ColorRole.WindowText).name()))
+        bar = QHBoxLayout()
+        bar.setContentsMargins(4, 2, 4, 2)
+        bar.setSpacing(0)
+        self.btn_add = QPushButton('+')
+        self.btn_add.setObjectName('listadd')
+        self.btn_add.setFixedSize(28, 20)
+        self.btn_add.setStyleSheet(button_qss)
+        self.btn_add.setToolTip('添加 TeX 文件')
+        self.btn_add.clicked.connect(self.add_files)
+        self.btn_remove = QPushButton('−')
+        self.btn_remove.setObjectName('listremove')
+        self.btn_remove.setFixedSize(28, 20)
+        self.btn_remove.setStyleSheet(button_qss)
+        self.btn_remove.setToolTip('从列表移除所选文件')
+        self.btn_remove.setEnabled(False)
+        self.btn_remove.clicked.connect(self._remove_selected)
+        divider = QFrame()
+        divider.setObjectName('plusminussep')
+        divider.setFixedWidth(1)
+        divider.setFixedHeight(16)
+        divider.setStyleSheet(
+            '#plusminussep { background: rgba(120, 120, 128, 0.28); }')
+        bar.addWidget(self.btn_add)
+        bar.addWidget(divider)
+        bar.addWidget(self.btn_remove)
+        bar.addStretch(1)
+        flv.addLayout(bar)
+        self.file_frame = frame
+        slayout.addWidget(frame, 1)
         self.sidebar = sidebar
         splitter.addWidget(sidebar)
 
@@ -1157,8 +1263,7 @@ class MainWindow(QMainWindow):
             # dropped files remember the folder they were scanned from,
             # so backups can mirror it under <root>/backup
             roots_ok = all(
-                self.file_list.item(i).data(Qt.ItemDataRole.UserRole)
-                == str(drop_dir)
+                self.file_list.item(i).data(ROLE_ROOT) == str(drop_dir)
                 for i in range(self.file_list.count()))
             lines.append('dropped files remember their scanned root: {}'
                          .format(roots_ok))
@@ -1213,11 +1318,30 @@ class MainWindow(QMainWindow):
             QApplication.processEvents()
             both = (str(f1) in self.output.toPlainText()
                     and str(f2) in self.output.toPlainText())
-            # the selection highlight is drawn by a stylesheet rule; item
-            # backgrounds are not captured by grab(), so check the rule
-            sheet = self.file_list.styleSheet()
-            highlight_ok = (':selected' in sheet and 'rgba' in sheet
-                            and 'border-radius' in sheet)
+            # rows are painted by our delegate: the selected row must
+            # differ from an unselected one (the accent bar). Delegates are
+            # captured by grab(), unlike stylesheet item backgrounds.
+            self.file_list.clearSelection()
+            QApplication.processEvents()
+            plain = self.file_list.grab().toImage()
+            self.file_list.item(1).setSelected(True)
+            QApplication.processEvents()
+            painted = self.file_list.grab().toImage()
+            row = self.file_list.visualItemRect(self.file_list.item(1))
+            off = self.file_list.viewport().mapTo(self.file_list,
+                                                  QPoint(0, 0))
+            # grabs are in device pixels (Retina), rects in logical points
+            ratio = painted.devicePixelRatio()
+            tx = int((off.x() + row.right() - 20) * ratio)
+            ty = int((off.y() + row.center().y()) * ratio)
+            sel_px = painted.pixelColor(tx, ty)
+            unsel_px = plain.pixelColor(tx, ty)
+            delta = (abs(sel_px.red() - unsel_px.red())
+                     + abs(sel_px.green() - unsel_px.green())
+                     + abs(sel_px.blue() - unsel_px.blue()))
+            delegate_ok = isinstance(self.file_list.itemDelegate(),
+                                     FileRowDelegate)
+            highlight_ok = delegate_ok and delta > 12
             # applying writes only the selected file
             self.file_list.clearSelection()
             self.file_list.item(1).setSelected(True)
@@ -1230,12 +1354,57 @@ class MainWindow(QMainWindow):
                         and (seltmp / 'backup' / 'two.tex.bak').is_file())
             sel_ok = (mode_ok and button_ok and only_second and both
                       and highlight_ok and apply_ok)
+            # framed list with the +/- bar, native icons, names, tooltips
+            frame = self.content_panel.parent() and None
+            frame = self.findChild(QFrame, 'fileframe')
+            frame_ok = (frame is not None
+                        and 'border' in frame.styleSheet())
+            add_btn = self.btn_add
+            remove_btn = self.btn_remove
+            buttons_ok = (add_btn.isEnabled() and 'listadd' ==
+                          add_btn.objectName() and remove_btn.isEnabled()
+                          and '−' == remove_btn.text())
+            items_ok = all(
+                self.file_list.item(i).data(ROLE_PATH)
+                and self.file_list.item(i).text()
+                == Path(self.file_list.item(i).data(ROLE_PATH)).name
+                and self.file_list.item(i).toolTip()
+                == self.file_list.item(i).data(ROLE_PATH)
+                and not self.file_list.item(i).icon().isNull()
+                for i in range(self.file_list.count()))
+            # the − button removes exactly the selected rows
+            self.file_list.clearSelection()
+            self.file_list.item(1).setSelected(True)
+            QApplication.processEvents()
+            before_remove = self.file_list.count()
+            self._remove_selected()
+            QApplication.processEvents()
+            remaining = [self.file_list.item(i).data(ROLE_PATH)
+                         for i in range(self.file_list.count())]
+            remove_ok = (self.file_list.count() == before_remove - 1
+                         and remaining == [str(f1)]
+                         and not self.btn_remove.isEnabled())
+            placeholder = self.file_list.placeholder_widget()
+            labels = [w.text() for w in placeholder.findChildren(QLabel)]
+            empty_ok = (not any(t.strip() == '+' for t in labels)
+                        and any('drop' in t for t in labels)
+                        and any('选择文件' in t for t in labels)
+                        and any('选择目录' in t for t in labels))
+            ui_ok = (frame_ok and buttons_ok and items_ok and remove_ok
+                     and empty_ok)
+            lines.append('list UI: frame {}, +/- buttons {}, rows '
+                         '(name/tooltip/icon) {}, - removes selection {}, '
+                         'empty state {}: {}'.format(
+                             frame_ok, buttons_ok, items_ok, remove_ok,
+                             empty_ok, ui_ok))
+            ok = ok and ui_ok
+
             lines.append('selection: multi-select {}, no preview button {}, '
-                         'preview follows selection {}, row highlight {}, '
+                         'preview follows selection {}, accent row bar {}, '
                          'apply only the selection {}: {}'.format(
                              mode_ok, button_ok, only_second and both,
                              highlight_ok, apply_ok, sel_ok))
-            ok = ok and sel_ok
+            ok = ok and sel_ok and highlight_ok
             shutil.rmtree(seltmp, ignore_errors=True)
             self.file_list.clear()
 
@@ -1364,11 +1533,49 @@ class MainWindow(QMainWindow):
         value = self.enc_out.currentText().strip()
         return None if (not value or value == '同输入') else value
 
+    def _file_icon(self, path):
+        """Native icon for a row (folders via the provider's folder icon,
+        files by type), cached per kind so large lists stay cheap."""
+        if not hasattr(self, '_icon_provider'):
+            self._icon_provider = QFileIconProvider()
+            self._icon_cache = {}
+        entry = Path(path)
+        key = ('dir',) if entry.is_dir() else ('file',
+                                               entry.suffix.lower())
+        icon = self._icon_cache.get(key)
+        if icon is None:
+            try:
+                if entry.is_dir():
+                    icon = self._icon_provider.icon(
+                        QFileIconProvider.IconType.Folder)
+                else:
+                    icon = self._icon_provider.icon(QFileInfo(str(entry)))
+            except Exception:
+                icon = self._icon_provider.icon(
+                    QFileIconProvider.IconType.File)
+            self._icon_cache[key] = icon
+        return icon
+
+    def _sync_list_buttons(self, *_args):
+        self.btn_remove.setEnabled(bool(self.file_list.selectedItems()))
+
+    def _remove_selected(self):
+        """Drop the selected rows from the list (the − button)."""
+        rows = sorted({self.file_list.row(item)
+                       for item in self.file_list.selectedItems()},
+                      reverse=True)
+        for row in rows:
+            self.file_list.takeItem(row)
+        self._sync_list_buttons()
+        if not self.file_list.count():
+            self.clear_output()
+            self.set_status('列表已清空')
+
     def _add_paths(self, paths, root=None):
         """Add paths (str or (str, root) pairs), remembering the scanned
         root each file came from: backups then mirror the source layout
         under <root>/backup. Loose files use their own directory."""
-        existing = {self.file_list.item(i).text()
+        existing = {self.file_list.item(i).data(ROLE_PATH)
                     for i in range(self.file_list.count())}
         added = 0
         first_added = None
@@ -1377,9 +1584,10 @@ class MainWindow(QMainWindow):
                 entry, tuple) else (entry, root)
             if name in existing:
                 continue
-            item = QListWidgetItem(name)
-            item.setData(Qt.ItemDataRole.UserRole,
-                         str(file_root or Path(name).parent))
+            item = QListWidgetItem(self._file_icon(name), Path(name).name)
+            item.setData(ROLE_PATH, name)
+            item.setData(ROLE_ROOT, str(file_root or Path(name).parent))
+            item.setToolTip(name)
             self.file_list.addItem(item)
             existing.add(name)
             added += 1
@@ -1402,7 +1610,9 @@ class MainWindow(QMainWindow):
     def scan_dir(self):
         initial = ''
         if self.file_list.count():
-            initial = str(Path(self.file_list.item(0).text()).parent)
+            first = (self.file_list.item(0).data(ROLE_PATH)
+                     or self.file_list.item(0).text())
+            initial = str(Path(first).parent)
         directory = QFileDialog.getExistingDirectory(
             self, '选择要扫描的目录', initial)
         if not directory:
@@ -1465,9 +1675,9 @@ class MainWindow(QMainWindow):
             item = self.file_list.item(i)
             if not item.isSelected():
                 continue
-            root = item.data(Qt.ItemDataRole.UserRole)
-            entries.append((Path(item.text()),
-                            Path(root) if root else None))
+            path = item.data(ROLE_PATH) or item.text()
+            root = item.data(ROLE_ROOT)
+            entries.append((Path(path), Path(root) if root else None))
         return entries
 
     def _format_options(self):
