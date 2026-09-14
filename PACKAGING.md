@@ -85,13 +85,15 @@ PyInstaller 不支持跨平台编译, Windows/Linux 版本通过 CI 在对应系
 * `format-tex-gui-macos-arm64.dmg` 内含 `format-tex-gui.app` (拖入
   Applications 即可安装)、指向 `/Applications` 的替身, 以及 `bin/format-tex`
   命令行版 (可复制到 `/usr/local/bin` 等目录使用).
-* 镜像由 `hdiutil` 生成 (UDZO 压缩), 并在 CI 中实际挂载校验: 应用可执行文件
-  与命令行版均存在且可运行. 由于 `.app` 在 CI 中先经过 SDK 26 标记补丁
-  (`macos_patch_sdk.sh`), 镜像内的应用保留 Liquid Glass 外观.
+* 镜像由 `diskutil image create from` (macOS 26 推荐的 `hdiutil create` 替代)
+  生成, UDZO 压缩; 更早的 macOS 缺少该子命令时回退到 `hdiutil create`.
+  校验时用 `hdiutil attach`/`detach` 实际挂载 (这两个子命令未被弃用),
+  确认应用可执行文件与命令行版均存在且可运行. 由于 `.app` 在 CI 中先经过
+  SDK 26 标记补丁 (`macos_patch_sdk.sh`), 镜像内的应用保留 Liquid Glass 外观.
 * 应用未签名/未公证, 首次打开请右键选择"打开", 或执行
   `xattr -dr com.apple.quarantine /Applications/format-tex-gui.app`.
-* 注: macOS 26 起 `hdiutil` 被标记为已弃用 (建议改用 `diskutil image`),
-  但仍可正常使用, 且在更早的 macOS 上同样可用, 因此仍采用 `hdiutil`.
+* 注: macOS 26 起 `hdiutil create` 被标记为已弃用, 已改用
+  `diskutil image create from`; `hdiutil attach`/`detach` 未被弃用, 仅用于校验.
 
 ## 使用方法
 
@@ -99,7 +101,7 @@ PyInstaller 不支持跨平台编译, Windows/Linux 版本通过 CI 在对应系
 的一整块** (从窗口顶端直到底部, 与标题栏左侧连成一体, 中间没有任何分隔线);
 左右之间没有竖线, 二者仅由"毛玻璃层 vs 不透明内容"区分; 分隔位置附近保留
 约 6 pt 的透明拖动区域 (悬停显示缩放光标) 用于调整宽度;
-窗口标题左对齐于侧栏边界右侧 8 pt 处 (随拖动/缩放自动跟随)。
+窗口标题左对齐于侧栏边界右侧 12 pt 处 (随拖动/缩放自动跟随)。
 
 材质与模糊方式按 Finder 的做法区分 (见 Apple 文档 NSVisualEffectView
 BlendingMode): 标题栏右段 (侧栏右侧) 使用工具栏材质 (默认 headerView) 且
@@ -110,6 +112,13 @@ blendingMode = withinWindow, 即只模糊窗口内部内容 —— 该材质层�
 blendingMode = behindWindow, 位于 Qt 视图**之下** —— Qt 侧栏控件透明, 因此
 材质可见; 该层覆盖侧栏整高 (含标题栏左侧区域), 红黄绿按钮与侧栏处于同一模糊
 层上, 与侧栏之间无接缝.
+
+窗口标题由本程序自行绘制 (`nswin.titleVisibility = hidden` + 一个置于毛玻璃层
+之上的 NSTextField): AppKit 会把**非 main 窗口**的标题画成未强调的灰色, 而 Qt
+窗口 `canBecomeMainWindow = NO` 永远无法成为 main, 因此原生标题始终偏灰
+(实测 #9a9b9c, 而 Finder/Notes 为 #e8e8e9/#ededed). 自绘标题使用系统 primary
+标签色与 semibold 字重 (macOS 26 工具栏标题风格), 并在窗口失去焦点时切换为
+secondary 标签色, 复现原生的"非活动变暗"行为 (实测活动态 #dddddd).
 
 内容面板 (右侧) 使用系统原生窗口背景色 (NSColor.windowBackgroundColor),
 而不是 Qt 调色板的近似值; 标题栏右段与下方内容之间**没有分隔线**, 仅以材质与

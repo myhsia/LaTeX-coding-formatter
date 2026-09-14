@@ -114,9 +114,18 @@ jobs:
           ln -s /Applications dist/dmg/Applications
           cp dist/format-tex-macos-arm64 dist/dmg/bin/format-tex
           chmod +x dist/dmg/bin/format-tex
-          hdiutil create -volname "LaTeX Coding Style Formatter" \
-            -srcfolder dist/dmg -ov -format UDZO \
-            dist/format-tex-gui-macos-arm64.dmg
+          # macOS 26 deprecates `hdiutil create`; use its replacement.
+          # (hdiutil attach/detach below are not deprecated and are only
+          # used to verify the image really contains the payload.)
+          rm -f dist/format-tex-gui-macos-arm64.dmg
+          if ! diskutil image create from --format UDZO \
+               --volumeName "LaTeX Coding Style Formatter" \
+               dist/dmg dist/format-tex-gui-macos-arm64.dmg; then
+            rm -f dist/format-tex-gui-macos-arm64.dmg
+            hdiutil create -volname "LaTeX Coding Style Formatter" \
+              -srcfolder dist/dmg -ov -format UDZO \
+              dist/format-tex-gui-macos-arm64.dmg
+          fi
           rm -rf dist/dmg
           mkdir -p /tmp/dmgcheck
           hdiutil attach -nobrowse -readonly -mountpoint /tmp/dmgcheck \

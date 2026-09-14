@@ -38,7 +38,8 @@ from platform_effects import (apply_effects, band_above_content,
                               band_height, band_material_name,
                               create_native_switch, debug_enabled,
                               has_native_switch, last_material_view,
-                              last_sidebar_view, lights_inset,
+                              last_sidebar_view, last_title_view,
+                              lights_inset,
                               native_switch_state, native_switch_view,
                               native_window_color, notes,
                               place_native_switch, prepare_qt,
@@ -580,6 +581,7 @@ class MainWindow(QMainWindow):
 
             # toolbar strip: 52 pt, right of the sidebar, top-flush
             band = last_material_view()
+            title = last_title_view()
             boundary = self.content_panel.mapTo(
                 self.centralWidget(), QPoint(0, 0)).x()
             bf = band.frame() if band is not None else None
@@ -636,12 +638,16 @@ class MainWindow(QMainWindow):
             side_below = (sidebar_v is not None and sidebar_v in subs
                           and qt_view in subs
                           and subs.index(sidebar_v) < subs.index(qt_view))
+            title_above = (title is not None and band is not None
+                           and title in subs and band in subs
+                           and subs.index(title) > subs.index(band))
             click_ok = (band is not None
                         and band.hitTest_((10.0, 10.0)) is None)
             lines.append('band above content, below chrome: {}, '
-                         'sidebar below Qt: {}, click-through: {}'.format(
-                             order_ok, side_below, click_ok))
-            ok = ok and order_ok and side_below and click_ok
+                         'sidebar below Qt: {}, title above band: {}, '
+                         'click-through: {}'.format(
+                             order_ok, side_below, title_above, click_ok))
+            ok = ok and order_ok and side_below and title_above and click_ok
 
             # the content surface uses the native window background
             expected_bg = native_window_color(self.dark)
@@ -783,7 +789,7 @@ class MainWindow(QMainWindow):
             ok = ok and inset_ok
 
             def title_left():
-                tf = nswin.toolbarTitlebarTitleTextField()
+                tf = last_title_view()
                 if tf is None:
                     return None
                 return screen_rect(tf).origin.x - nswin.frame().origin.x
@@ -814,8 +820,32 @@ class MainWindow(QMainWindow):
             lines.append('splitter grab width: {} pt'.format(
                 self.splitter.handleWidth()))
             ok = ok and self.splitter.handleWidth() >= 4
-            lines.append('title visible: {}'.format(
-                nswin.titleVisibility() == AppKit.NSWindowTitleVisible))
+            lines.append('native title hidden (label drawn instead): {}'
+                         .format(nswin.titleVisibility()
+                                 == AppKit.NSWindowTitleHidden))
+            # the title must render in the primary colour and a semibold
+            # font: AppKit was drawing the title of our non-main window
+            # unemphasized (#9a9b9c instead of Finder's #e8e8e9)
+            colour_ok = weight_ok = False
+            if title is not None:
+                try:
+                    rgb = title.textColor().colorUsingColorSpace_(
+                        AppKit.NSColorSpace.sRGBColorSpace())
+                    lum = (0.2126 * rgb.redComponent()
+                           + 0.7152 * rgb.greenComponent()
+                           + 0.0722 * rgb.blueComponent())
+                    colour_ok = lum >= 0.75 if self.dark else lum <= 0.25
+                except Exception:
+                    colour_ok = False
+                try:
+                    traits = title.font().fontDescriptor().symbolicTraits()
+                    weight_ok = bool(traits
+                                     & AppKit.NSFontDescriptorTraitBold)
+                except Exception:
+                    weight_ok = False
+            lines.append('title primary colour: {}, semibold weight: {}'
+                         .format(colour_ok, weight_ok))
+            ok = ok and colour_ok and weight_ok
             lines.append('contentView is Qt view: {}'.format(
                 nswin.contentView() is qt_view))
             lines.append('effect: {}'.format(self.effect_note))

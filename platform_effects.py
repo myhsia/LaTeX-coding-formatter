@@ -36,9 +36,10 @@ _NOTES = []
 
 BAND_HEIGHT = 52.0
 LIGHTS_INSET = 19.0      # native unified-toolbar inset (Finder/Notes)
-TITLE_GAP = 8.0          # gap between the traffic lights and the title
+TITLE_GAP = 12.0         # gap between the sidebar edge and the title
 _BAND_VIEW = None
 _SIDEBAR_VIEW = None
+_TITLE_VIEW = None
 _SIDEBAR_WIDTH = 0.0
 _SWITCH = None
 _SWITCH_TARGET = None
@@ -89,6 +90,20 @@ def last_material_view():
 def last_sidebar_view():
     """The sidebar material view inserted on macOS (for tests)."""
     return _SIDEBAR_VIEW
+
+
+def last_title_view():
+    """The title label we draw ourselves on macOS (for tests)."""
+    return _TITLE_VIEW
+
+
+def title_font_size():
+    """Point size for the window title (macOS 26 toolbar titles use the
+    standard 13 pt; override with FORMAT_TEX_TITLE_SIZE)."""
+    try:
+        return float(os.environ.get('FORMAT_TEX_TITLE_SIZE', 13.0))
+    except (TypeError, ValueError):
+        return 13.0
 
 
 def band_material_name():
@@ -192,6 +207,8 @@ def _debug_outlines():
         _outline(_BAND_VIEW, 1.0, 0.0, 0.0)      # red: toolbar strip
     if _SIDEBAR_VIEW is not None:
         _outline(_SIDEBAR_VIEW, 0.0, 0.6, 1.0)   # blue: sidebar column
+    if _TITLE_VIEW is not None:
+        _outline(_TITLE_VIEW, 1.0, 0.9, 0.0)     # yellow: title label
 
 
 def _switch_target_class():
@@ -371,7 +388,7 @@ def _macos(window, dark):
     import objc
     import AppKit
 
-    global _BAND_VIEW, _SIDEBAR_VIEW
+    global _BAND_VIEW, _SIDEBAR_VIEW, _TITLE_VIEW
 
     qt_view = objc.objc_object(c_void_p=int(window.winId()))
     nswin = qt_view.window()
@@ -388,7 +405,12 @@ def _macos(window, dark):
     if not (mask & AppKit.NSWindowStyleMaskFullSizeContentView):
         nswin.setStyleMask_(mask | AppKit.NSWindowStyleMaskFullSizeContentView)
     nswin.setTitlebarAppearsTransparent_(True)
-    nswin.setTitleVisibility_(AppKit.NSWindowTitleVisible)
+    # AppKit draws the title of a non-main window unemphasized, and a Qt
+    # window reports canBecomeMainWindow = NO, so its title stays grey
+    # (#9a9b9c) no matter what textColor we set. Hide it and draw our own
+    # label instead: full control over colour and weight, with the native
+    # active/inactive dimming reproduced on activation changes.
+    nswin.setTitleVisibility_(AppKit.NSWindowTitleHidden)
     try:
         nswin.setBackgroundColor_(AppKit.NSColor.windowBackgroundColor())
     except Exception as exc:
@@ -412,6 +434,8 @@ def _macos(window, dark):
         _SIDEBAR_VIEW = _make_material_view(
             AppKit, AppKit.NSVisualEffectMaterialSidebar,
             AppKit.NSVisualEffectBlendingModeBehindWindow)
+    if _TITLE_VIEW is None:
+        _TITLE_VIEW = _make_title_field(AppKit, nswin.title())
     # the sidebar sits below Qt (its column is transparent) while the
     # band sits above Qt (the content panel under it is opaque)
     for view, position in ((_SIDEBAR_VIEW, AppKit.NSWindowBelow),
@@ -421,6 +445,13 @@ def _macos(window, dark):
         except Exception:
             pass
         theme.addSubview_positioned_relativeTo_(view, position, qt_view)
+    # our title must be above the band, otherwise the material frosts it
+    try:
+        _TITLE_VIEW.removeFromSuperview()
+    except Exception:
+        pass
+    theme.addSubview_positioned_relativeTo_(_TITLE_VIEW, AppKit.NSWindowAbove,
+                                            _BAND_VIEW)
     if not band_above_content(window):
         _note('band order unexpected (should be above the content view, '
               'below the titlebar chrome)')
@@ -429,6 +460,21 @@ def _macos(window, dark):
     _align_titlebar(nswin)
     _debug_outlines()
     return '52 pt band + sidebar blur'
+
+
+def _make_title_field(AppKit, text):
+    """A plain label for the window title, drawn above the band."""
+    field = AppKit.NSTextField.alloc().init()
+    field.setBezeled_(False)
+    field.setDrawsBackground_(False)
+    field.setEditable_(False)
+    field.setSelectable_(False)
+    field.setStringValue_(text or '')
+    field.setFont_(AppKit.NSFont.systemFontOfSize_weight_(
+        title_font_size(), AppKit.NSFontWeightSemibold))
+    field.setAlignment_(AppKit.NSTextAlignmentLeft)
+    field.sizeToFit()
+    return field
 
 
 def band_above_content(window):
@@ -532,11 +578,15 @@ def _align_titlebar(nswin):
             bf = button.frame()
             button.setFrameOrigin_((bf.origin.x + delta_x, bf.origin.y))
 
-    # title: left-align it just right of the sidebar divider (falling
-    # back to just after the traffic lights when there is no sidebar)
-    title = nswin.toolbarTitlebarTitleTextField()
+    # title: our own label, left-aligned just right of the sidebar
+    # boundary (falling back to just after the traffic lights when there
+    # is no sidebar). AppKit draws the title of a non-main window in an
+    # unemphasized grey and a Qt window can never be main, so we render
+    # it ourselves (see _style_title for the colour/dimming).
+    title = _TITLE_VIEW
     if title is None:
         return
+    _style_title(AppKit, nswin, title)
     if _SIDEBAR_WIDTH > 0:
         target = left + _SIDEBAR_WIDTH + title_gap()
     else:
@@ -545,10 +595,41 @@ def _align_titlebar(nswin):
             return
         zoom_rect = screen_rect(zoom)
         target = zoom_rect.origin.x + zoom_rect.size.width + title_gap()
-    delta = target - screen_rect(title).origin.x
-    if abs(delta) >= 0.5:
-        tf = title.frame()
-        title.setFrameOrigin_((tf.origin.x + delta, tf.origin.y))
+    title.sizeToFit()
+    size = title.frame().size
+    # vertical: centre the label on the band, like the traffic lights
+    y = top - BAND_HEIGHT / 2.0 - size.height / 2.0
+    title.setFrame_(((target - left, y - frame.origin.y),
+                     (size.width, size.height)))
+    title.setHidden_(False)
+
+
+def _style_title(AppKit, nswin, title):
+    """Colour our title label the way macOS renders a main window's
+    title: the primary label colour (white in dark mode, black in light)
+    while the window is active, dimmed to the secondary colour when it is
+    inactive - the native auto-dim behaviour, applied by us because Qt's
+    window can never become main (canBecomeMainWindow = NO), which is why
+    AppKit's own title stayed grey (#9a9b9c vs Finder's #e8e8e9)."""
+    try:
+        active = bool(nswin.isKeyWindow())
+        color = (AppKit.NSColor.labelColor() if active
+                 else AppKit.NSColor.secondaryLabelColor())
+        title.setTextColor_(color)
+    except Exception as exc:
+        _note('title colour failed: {}: {}'.format(type(exc).__name__, exc))
+    if debug_enabled():
+        try:
+            rgb = title.textColor().colorUsingColorSpace_(
+                AppKit.NSColorSpace.sRGBColorSpace())
+            print('[debug] title key={} colour=#%02x%02x%02x pt=%.1f' % (
+                bool(nswin.isKeyWindow()),
+                round(rgb.redComponent() * 255),
+                round(rgb.greenComponent() * 255),
+                round(rgb.blueComponent() * 255),
+                title.font().pointSize()), flush=True)
+        except Exception:
+            pass
 
 
 def _windows(window, dark):
