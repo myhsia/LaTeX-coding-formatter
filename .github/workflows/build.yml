@@ -104,6 +104,29 @@ jobs:
           mkdir -p /tmp/guiselftest && cd /tmp/guiselftest
           "$GITHUB_WORKSPACE/dist/format-tex-gui-macos-arm64" --self-test
           grep -q '^PASS' format_tex_gui_selftest.txt
+      - name: Build DMG (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          rm -rf dist/dmg
+          mkdir -p dist/dmg/bin
+          cp -R dist/format-tex-gui.app dist/dmg/
+          ln -s /Applications dist/dmg/Applications
+          cp dist/format-tex-macos-arm64 dist/dmg/bin/format-tex
+          chmod +x dist/dmg/bin/format-tex
+          hdiutil create -volname "LaTeX Coding Style Formatter" \
+            -srcfolder dist/dmg -ov -format UDZO \
+            dist/format-tex-gui-macos-arm64.dmg
+          rm -rf dist/dmg
+          mkdir -p /tmp/dmgcheck
+          hdiutil attach -nobrowse -readonly -mountpoint /tmp/dmgcheck \
+            dist/format-tex-gui-macos-arm64.dmg
+          test -x /tmp/dmgcheck/format-tex-gui.app/Contents/MacOS/format-tex-gui
+          test -x /tmp/dmgcheck/bin/format-tex
+          /tmp/dmgcheck/bin/format-tex --help | head -1
+          hdiutil detach /tmp/dmgcheck
+          rmdir /tmp/dmgcheck
+          ls -lh dist/*.dmg
       - uses: actions/upload-artifact@v4
         with:
           name: format-tex-${{ matrix.suffix }}

@@ -58,7 +58,7 @@ PyInstaller 不支持跨平台编译, Windows/Linux 版本通过 CI 在对应系
    | `format-tex-windows-x86_64` | `format-tex-gui-windows-x86_64.exe`, `format-tex-windows-x86_64.exe` |
    | `format-tex-windows-arm64`  | Windows on ARM (WOA, 如 Surface) 原生版本; **不兼容 x64** |
    | `windows-msi`               | `format-tex-windows-x86_64.msi`, `format-tex-windows-arm64.msi` |
-   | `format-tex-macos-arm64`    | 图形界面版与命令行版 (arm64) |
+   | `format-tex-macos-arm64`    | 图形界面版、命令行版 (arm64) 以及 `.dmg` 安装镜像 (`format-tex-gui-macos-arm64.dmg`) |
    | `format-tex-linux-x86_64`   | 图形界面版与命令行版 (x86_64) |
 
    每个平台的二进制在 CI 上均通过冒烟测试 (中文 English 中文 → 中文 English 中文)。
@@ -79,6 +79,19 @@ PyInstaller 不支持跨平台编译, Windows/Linux 版本通过 CI 在对应系
   与主版本号绑定); OSMF 对**有营收**的使用者另有付费义务.
   CI 将 WiX 固定为 `7.0.0`: 升级到 v8 时需同时把标记改为 `wix8`.
 * 版本号取自推送的 `v*` 标签 (例如 `v1.0` → `1.0.0`), 手动触发时默认 `1.0.0`.
+
+### macOS 安装镜像 (DMG)
+
+* `format-tex-gui-macos-arm64.dmg` 内含 `format-tex-gui.app` (拖入
+  Applications 即可安装)、指向 `/Applications` 的替身, 以及 `bin/format-tex`
+  命令行版 (可复制到 `/usr/local/bin` 等目录使用).
+* 镜像由 `hdiutil` 生成 (UDZO 压缩), 并在 CI 中实际挂载校验: 应用可执行文件
+  与命令行版均存在且可运行. 由于 `.app` 在 CI 中先经过 SDK 26 标记补丁
+  (`macos_patch_sdk.sh`), 镜像内的应用保留 Liquid Glass 外观.
+* 应用未签名/未公证, 首次打开请右键选择"打开", 或执行
+  `xattr -dr com.apple.quarantine /Applications/format-tex-gui.app`.
+* 注: macOS 26 起 `hdiutil` 被标记为已弃用 (建议改用 `diskutil image`),
+  但仍可正常使用, 且在更早的 macOS 上同样可用, 因此仍采用 `hdiutil`.
 
 ## 使用方法
 
