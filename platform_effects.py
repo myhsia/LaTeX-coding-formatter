@@ -84,6 +84,28 @@ def last_sidebar_view():
     return _SIDEBAR_VIEW
 
 
+def band_material_name():
+    """Material for the title band. Finder-style toolbars use a toolbar
+    material with `withinWindow` blending (blurring the window's own
+    content, so over the opaque content it looks like a frosted layer),
+    while the sidebar keeps `behindWindow` (the desktop blurs through).
+    Override for A/B testing with FORMAT_TEX_BAND_MATERIAL
+    (sidebar|headerView|titlebar|underWindowBackground)."""
+    return os.environ.get('FORMAT_TEX_BAND_MATERIAL',
+                          'headerView').strip()
+
+
+def _material_constant(AppKit, name):
+    table = {
+        'sidebar': AppKit.NSVisualEffectMaterialSidebar,
+        'headerView': AppKit.NSVisualEffectMaterialHeaderView,
+        'titlebar': AppKit.NSVisualEffectMaterialTitlebar,
+        'underwindowbackground':
+            AppKit.NSVisualEffectMaterialUnderWindowBackground,
+    }
+    return table.get(name.lower(), AppKit.NSVisualEffectMaterialHeaderView)
+
+
 def set_sidebar_width(width):
     """Tell the native layer how wide the Qt sidebar column is, so the
     sidebar material can be framed to match (Finder-style full-height
@@ -242,10 +264,10 @@ def reposition_materials(window):
         _note('reposition failed: {}: {}'.format(type(exc).__name__, exc))
 
 
-def _make_material_view(AppKit):
+def _make_material_view(AppKit, material, blending):
     view = AppKit.NSVisualEffectView.alloc().init()
-    view.setMaterial_(AppKit.NSVisualEffectMaterialSidebar)
-    view.setBlendingMode_(AppKit.NSVisualEffectBlendingModeBehindWindow)
+    view.setMaterial_(material)
+    view.setBlendingMode_(blending)
     view.setState_(AppKit.NSVisualEffectStateFollowsWindowActiveState)
     return view
 
@@ -278,9 +300,17 @@ def _macos(window, dark):
         pass
 
     if _BAND_VIEW is None:
-        _BAND_VIEW = _make_material_view(AppKit)
+        # toolbar-like: blur the window's own content behind the band
+        _BAND_VIEW = _make_material_view(
+            AppKit, _material_constant(AppKit, band_material_name()),
+            AppKit.NSVisualEffectBlendingModeWithinWindow)
     if _SIDEBAR_VIEW is None:
-        _SIDEBAR_VIEW = _make_material_view(AppKit)
+        # sidebar-like: let the desktop blur through
+        _SIDEBAR_VIEW = _make_material_view(
+            AppKit, AppKit.NSVisualEffectMaterialSidebar,
+            AppKit.NSVisualEffectBlendingModeBehindWindow)
+    # order matters: the band must sit above the sidebar so that, over the
+    # sidebar column, it blurs the sidebar's material (desktop shows through)
     for view in (_SIDEBAR_VIEW, _BAND_VIEW):
         try:
             view.removeFromSuperview()

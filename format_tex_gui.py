@@ -19,7 +19,8 @@ import sys
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, QTimer, QUrl, Qt
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, \
+    QTimer, QUrl, Qt
 from PySide6.QtGui import QColor, QDropEvent, QFont, QFontDatabase, \
     QFontMetrics, QPalette, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
@@ -34,6 +35,7 @@ from format_tex import FormatOptions, format_file, scan_directory
 from native_menu import (CUSTOM_SENTINEL, build_menu, menu_entries,
                          popup_native_menu)
 from platform_effects import (apply_effects, band_height,
+                              band_material_name,
                               create_native_switch, has_native_switch,
                               last_material_view, last_sidebar_view,
                               lights_inset, native_switch_state,
@@ -281,7 +283,7 @@ class MainWindow(QMainWindow):
         window_color = self.palette().color(QPalette.ColorRole.Window)
         mid_color = self.palette().color(QPalette.ColorRole.Mid)
         outer = QHBoxLayout(central)
-        outer.setContentsMargins(0, int(band_height()), 0, 0)
+        outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
         self.outer_layout = outer
 
@@ -296,8 +298,12 @@ class MainWindow(QMainWindow):
         # --- left: sidebar (file list over the shared blur) ---
         sidebar = QWidget()
         sidebar.setMinimumWidth(180)
+        # explicit transparency: the sidebar shows the native material
+        # behind it (and makes the intent testable)
+        sidebar.setObjectName('sidebar')
+        sidebar.setStyleSheet('#sidebar { background: transparent; }')
         slayout = QVBoxLayout(sidebar)
-        slayout.setContentsMargins(12, 12, 12, 12)
+        slayout.setContentsMargins(12, int(band_height()) + 12, 12, 12)
         slayout.setSpacing(8)
 
         # macOS-Settings-style grouped box: two rows with a hairline
@@ -357,7 +363,7 @@ class MainWindow(QMainWindow):
         panel.setStyleSheet('#panel {{ background: {}; }}'.format(
             window_color.name()))
         pv = QVBoxLayout(panel)
-        pv.setContentsMargins(12, 12, 12, 12)
+        pv.setContentsMargins(12, int(band_height()) + 12, 12, 12)
         pv.setSpacing(8)
         hairline = QFrame()
         hairline.setObjectName('hairline')
@@ -498,8 +504,10 @@ class MainWindow(QMainWindow):
                             QEvent.Type.WindowStateChange):
             # no title bar in full screen - drop the transparent strip
             full = bool(self.windowState() & Qt.WindowState.WindowFullScreen)
-            self.outer_layout.setContentsMargins(
-                0, 0 if full else int(band_height()), 0, 0)
+            top = 0 if full else int(band_height())
+            self.sidebar.layout().setContentsMargins(12, top + 12, 12, 12)
+            self.content_panel.layout().setContentsMargins(
+                12, top + 12, 12, 12)
             self._sync_sidebar_width()
             reposition_materials(self)
 
@@ -577,15 +585,35 @@ class MainWindow(QMainWindow):
             band = last_material_view()
             band_ok = (band is not None
                        and 'VisualEffectView' in type(band).__name__
-                       and band.material()
-                       == AppKit.NSVisualEffectMaterialSidebar
                        and abs(band.frame().size.height - band_height()) < 1
                        and abs((band.frame().origin.y
                                 + band.frame().size.height)
                                - theme.bounds().size.height) < 2)
-            lines.append('52 pt sidebar-blur band, top-flush: {}'.format(
-                band_ok))
+            lines.append('52 pt title band, top-flush: {}'.format(band_ok))
             ok = ok and band_ok
+
+            # Finder-style materials: band blurs the window's own content
+            # (withinWindow), sidebar lets the desktop through
+            # (behindWindow); the band must sit above the sidebar
+            sidebar_v = last_sidebar_view()
+            modes = {0: 'behindWindow', 1: 'withinWindow'}
+            band_blend = (band.blendingMode()
+                          == AppKit.NSVisualEffectBlendingModeWithinWindow)
+            side_blend = (sidebar_v is not None
+                          and sidebar_v.blendingMode()
+                          == AppKit.NSVisualEffectBlendingModeBehindWindow)
+            subs = list(theme.subviews())
+            band_above = (band in subs and sidebar_v in subs
+                          and subs.index(band) > subs.index(sidebar_v))
+            mat_ok = band_blend and side_blend and band_above
+            lines.append('materials: band {} + {}, sidebar {} + {}, band '
+                         'above sidebar {}: {}'.format(
+                             band_material_name(),
+                             modes.get(band.blendingMode()), 'sidebar',
+                             modes.get(sidebar_v.blendingMode())
+                             if sidebar_v is not None else '?',
+                             band_above, mat_ok))
+            ok = ok and mat_ok
             lines.append('no native toolbar: {}'.format(
                 nswin.toolbar() is None))
             ok = ok and nswin.toolbar() is None
@@ -785,6 +813,21 @@ class MainWindow(QMainWindow):
             lines.append('file list is transparent over the sidebar '
                          'material: {}'.format(list_transparent > 0))
             ok = ok and list_transparent > 0
+
+            # the band region: the panel must be opaque there (so the band
+            # frosts the window colour) while the sidebar stays transparent
+            strip_h = int(band_height())
+            panel_top = self.content_panel.grab(
+                QRect(0, 0, self.content_panel.width(), strip_h)).toImage()
+            side_top = self.sidebar.grab(
+                QRect(0, 0, self.sidebar.width(), strip_h)).toImage()
+            p_op, p_tr = alpha_stats(panel_top)
+            s_op, s_tr = alpha_stats(side_top)
+            backdrop_ok = p_tr == 0 and p_op > 0 and s_tr > 0
+            lines.append('band backdrop: panel opaque ({} op/{} tr), sidebar '
+                         'transparent ({} op/{} tr): {}'.format(
+                             p_op, p_tr, s_op, s_tr, backdrop_ok))
+            ok = ok and backdrop_ok
             placeholder = self.file_list.placeholder_widget()
             placeholder_visible = placeholder.isVisible()
             lines.append('placeholder shown when empty: {}'.format(
