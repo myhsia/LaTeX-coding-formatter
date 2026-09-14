@@ -300,7 +300,8 @@ def _macos(window, dark):
         pass
 
     if _BAND_VIEW is None:
-        # toolbar-like: blur the window's own content behind the band
+        # toolbar-like strip for the title bar right of the sidebar:
+        # blurs the window's own content behind it
         _BAND_VIEW = _make_material_view(
             AppKit, _material_constant(AppKit, band_material_name()),
             AppKit.NSVisualEffectBlendingModeWithinWindow)
@@ -325,6 +326,9 @@ def _macos(window, dark):
 
 
 def _place_band(nswin, theme):
+    """Frame the toolbar-material strip. It covers only the title bar
+    region to the RIGHT of the sidebar, so the sidebar's own blur runs
+    uninterrupted from the top of the window down (no seam, no line)."""
     import AppKit
     if _BAND_VIEW is None:
         return
@@ -332,9 +336,11 @@ def _place_band(nswin, theme):
         _BAND_VIEW.setHidden_(True)      # no title bar in full screen
         return
     bounds = theme.bounds()
+    x = _SIDEBAR_WIDTH if _SIDEBAR_WIDTH > 0 else 0.0
+    width = max(1.0, bounds.size.width - x)
     _BAND_VIEW.setHidden_(False)
-    _BAND_VIEW.setFrame_(((0.0, bounds.size.height - BAND_HEIGHT),
-                          (bounds.size.width, BAND_HEIGHT)))
+    _BAND_VIEW.setFrame_(((x, bounds.size.height - BAND_HEIGHT),
+                          (width, BAND_HEIGHT)))
 
 
 def _place_sidebar(nswin, theme):

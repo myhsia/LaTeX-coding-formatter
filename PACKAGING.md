@@ -95,18 +95,20 @@ PyInstaller 不支持跨平台编译, Windows/Linux 版本通过 CI 在对应系
 
 ## 使用方法
 
-界面为类似 Finder 的左右布局: 左侧为文件列表栏, 左右之间为贯穿整窗
-(含标题栏区域) 的 1 pt 分隔线, 分隔条附近保留约 6 pt 的透明拖动区域
-用于调整宽度; 窗口标题左对齐于分隔线右侧 8 pt 处 (随拖动/缩放自动跟随)。
+界面为类似 Finder 的左右布局: 左侧为文件列表栏, 其毛玻璃层为**整窗高度
+的一整块** (从窗口顶端直到底部, 与标题栏左侧连成一体, 中间没有任何分隔线);
+左右之间没有竖线, 二者仅由"毛玻璃层 vs 不透明内容"区分; 分隔位置附近保留
+约 6 pt 的透明拖动区域 (悬停显示缩放光标) 用于调整宽度;
+窗口标题左对齐于侧栏边界右侧 8 pt 处 (随拖动/缩放自动跟随)。
 
 材质与模糊方式按 Finder 的做法区分 (见 Apple 文档 NSVisualEffectView
-BlendingMode): 标题栏色带使用工具栏材质 (默认 headerView) 且
-blendingMode = withinWindow, 即只模糊窗口内部内容 —— 在右侧不透明内容区
-之上呈现为"其后有不透明层"的磨砂效果; 侧栏使用 sidebar 材质且
-blendingMode = behindWindow, 即模糊窗口背后的桌面, 呈半透明效果;
-色带位于侧栏material 之上, 因此色带左侧 (侧栏上方) 仍透出桌面模糊。
-可用环境变量 FORMAT_TEX_BAND_MATERIAL 覆盖色带材质
-(sidebar|headerView|titlebar|underWindowBackground) 以便对比。
+BlendingMode): 标题栏右段 (侧栏右侧) 使用工具栏材质 (默认 headerView) 且
+blendingMode = withinWindow, 即只模糊窗口内部内容 —— 因其下方为不透明内容区,
+呈现为"其后有不透明层"的磨砂效果; 侧栏使用 sidebar 材质且
+blendingMode = behindWindow, 即模糊窗口背后的桌面, 呈半透明效果, 且该层
+覆盖侧栏整高 (含标题栏左侧区域), 因此红黄绿按钮与侧栏处于同一模糊层上,
+与侧栏之间无接缝. 可用环境变量 FORMAT_TEX_BAND_MATERIAL 覆盖色带材质
+(sidebar|headerView|titlebar|underWindowBackground) 以便对比.
 
 侧栏顶部为 macOS 设置风格的分组框 (圆角浅灰底, 两行之间为细分隔线):
 第一行左侧 "扩展名"、右侧为下拉按钮 (宽度自动适配其弹出菜单, 使弹出菜单与按钮

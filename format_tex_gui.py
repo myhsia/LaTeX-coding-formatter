@@ -448,15 +448,6 @@ class MainWindow(QMainWindow):
                 self.palette().color(QPalette.ColorRole.WindowText).name()))
         layout.addWidget(self.status_label)
 
-        # full-height divider at the sidebar's right edge: it starts at
-        # y=0 so it also runs through the transparent title-bar band
-        self.sidebar_sep = QFrame(central)
-        self.sidebar_sep.setObjectName('sidebarsep')
-        self.sidebar_sep.setFixedWidth(1)
-        self.sidebar_sep.setStyleSheet(
-            '#sidebarsep { background: rgba(120, 120, 128, 0.35); }')
-        self.sidebar_sep.raise_()
-
         self.effect_note = None
         self._effects_applied = False
         self._notes_seen = 0
@@ -483,15 +474,13 @@ class MainWindow(QMainWindow):
         reposition_materials(self)
 
     def _sync_sidebar_width(self):
-        """Keep the native sidebar material and the divider in step with
-        the Qt layout: the divider sits at the content panel's left edge
-        (covering the splitter's invisible grab area)."""
+        """Tell the native layer where the sidebar ends: the boundary is
+        the content panel's left edge (which also covers the splitter's
+        invisible grab area). The region is marked only by the material
+        change - there is no divider line."""
         divider_x = self.content_panel.mapTo(
             self.centralWidget(), QPoint(0, 0)).x()
         set_sidebar_width(divider_x)
-        self.sidebar_sep.setGeometry(divider_x - 1, 0, 1,
-                                     self.centralWidget().height())
-        self.sidebar_sep.raise_()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -581,20 +570,30 @@ class MainWindow(QMainWindow):
             reposition_materials(self)
             QApplication.processEvents()
 
-            # 52 pt sidebar-blur band behind the top strip
+            # toolbar strip: 52 pt, right of the sidebar, top-flush
             band = last_material_view()
-            band_ok = (band is not None
+            boundary = self.content_panel.mapTo(
+                self.centralWidget(), QPoint(0, 0)).x()
+            bf = band.frame() if band is not None else None
+            band_ok = (bf is not None
                        and 'VisualEffectView' in type(band).__name__
-                       and abs(band.frame().size.height - band_height()) < 1
-                       and abs((band.frame().origin.y
-                                + band.frame().size.height)
+                       and abs(bf.size.height - band_height()) < 1
+                       and abs(bf.origin.x - boundary) < 2
+                       and abs(bf.size.width
+                               - (theme.bounds().size.width
+                                  - boundary)) < 2
+                       and abs((bf.origin.y + bf.size.height)
                                - theme.bounds().size.height) < 2)
-            lines.append('52 pt title band, top-flush: {}'.format(band_ok))
+            lines.append('toolbar strip right of the sidebar ({}..{:.0f} pt), '
+                         'top-flush: {}'.format(
+                             boundary, boundary + (bf.size.width if bf else 0),
+                             band_ok))
             ok = ok and band_ok
 
-            # Finder-style materials: band blurs the window's own content
-            # (withinWindow), sidebar lets the desktop through
-            # (behindWindow); the band must sit above the sidebar
+            # Finder-style materials: the toolbar strip blurs the window's
+            # own content (withinWindow), the sidebar lets the desktop
+            # through (behindWindow) and spans the full height, adjacent
+            # to the strip with no overlap
             sidebar_v = last_sidebar_view()
             modes = {0: 'behindWindow', 1: 'withinWindow'}
             band_blend = (band.blendingMode()
@@ -602,17 +601,20 @@ class MainWindow(QMainWindow):
             side_blend = (sidebar_v is not None
                           and sidebar_v.blendingMode()
                           == AppKit.NSVisualEffectBlendingModeBehindWindow)
-            subs = list(theme.subviews())
-            band_above = (band in subs and sidebar_v in subs
-                          and subs.index(band) > subs.index(sidebar_v))
-            mat_ok = band_blend and side_blend and band_above
-            lines.append('materials: band {} + {}, sidebar {} + {}, band '
-                         'above sidebar {}: {}'.format(
+            sf = sidebar_v.frame() if sidebar_v is not None else None
+            adjacent = (bf is not None and sf is not None
+                        and abs(sf.origin.x) < 1
+                        and abs(sf.size.height - theme.bounds().size.height) < 2
+                        and abs((sf.origin.x + sf.size.width)
+                                - bf.origin.x) < 2)
+            mat_ok = band_blend and side_blend and adjacent
+            lines.append('materials: band {} + {}, sidebar {} + {} full '
+                         'height, adjacent: {}'.format(
                              band_material_name(),
                              modes.get(band.blendingMode()), 'sidebar',
                              modes.get(sidebar_v.blendingMode())
                              if sidebar_v is not None else '?',
-                             band_above, mat_ok))
+                             mat_ok))
             ok = ok and mat_ok
             lines.append('no native toolbar: {}'.format(
                 nswin.toolbar() is None))
@@ -760,32 +762,23 @@ class MainWindow(QMainWindow):
                 return (r.origin.x + r.size.width) - nswin.frame().origin.x
 
             def divider_x():
-                return self.sidebar_sep.geometry().x() + 1
+                """The sidebar/content boundary (no line is drawn there)."""
+                return self.content_panel.mapTo(
+                    self.centralWidget(), QPoint(0, 0)).x()
 
             gap_ok = (title_left() is not None
                       and abs((title_left() - divider_x())
                               - title_gap()) < 2)
-            lines.append('title left-aligned right of the divider (gap '
-                         '{:.0f} pt vs {:.0f}): {}'.format(
+            lines.append('title left-aligned right of the sidebar boundary '
+                         '(gap {:.0f} pt vs {:.0f}): {}'.format(
                              (title_left() or 0) - divider_x(), title_gap(),
                              gap_ok))
             ok = ok and gap_ok
 
-            # the divider runs the full window height through the band
-            sep = self.sidebar_sep
-            sep_ok = (sep.isVisible()
-                      and abs(sep.geometry().x() + 1
-                              - (self.content_panel.mapTo(
-                                  self.centralWidget(), QPoint(0, 0)).x())
-                              ) < 2
-                      and sep.geometry().y() <= 1
-                      and abs(sep.geometry().height()
-                              - self.centralWidget().height()) < 2)
-            lines.append('sidebar divider full height (y {} h {} of {}) '
-                         'through the band: {}'.format(
-                             sep.geometry().y(), sep.geometry().height(),
-                             self.centralWidget().height(), sep_ok))
-            ok = ok and sep_ok
+            # there is no divider line: the boundary is the material change
+            no_sep = self.centralWidget().findChild(QFrame, 'sidebarsep') is None
+            lines.append('no vertical divider line: {}'.format(no_sep))
+            ok = ok and no_sep
             lines.append('splitter grab width: {} pt'.format(
                 self.splitter.handleWidth()))
             ok = ok and self.splitter.handleWidth() >= 4
@@ -814,7 +807,7 @@ class MainWindow(QMainWindow):
                          'material: {}'.format(list_transparent > 0))
             ok = ok and list_transparent > 0
 
-            # the band region: the panel must be opaque there (so the band
+            # the toolbar strip: the panel must be opaque under it (so it
             # frosts the window colour) while the sidebar stays transparent
             strip_h = int(band_height())
             panel_top = self.content_panel.grab(
@@ -824,7 +817,7 @@ class MainWindow(QMainWindow):
             p_op, p_tr = alpha_stats(panel_top)
             s_op, s_tr = alpha_stats(side_top)
             backdrop_ok = p_tr == 0 and p_op > 0 and s_tr > 0
-            lines.append('band backdrop: panel opaque ({} op/{} tr), sidebar '
+            lines.append('strip backdrop: panel opaque ({} op/{} tr), sidebar '
                          'transparent ({} op/{} tr): {}'.format(
                              p_op, p_tr, s_op, s_tr, backdrop_ok))
             ok = ok and backdrop_ok
