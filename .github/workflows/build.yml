@@ -5,6 +5,21 @@ on:
   push:
     tags: ['v*']
 
+env:
+  PYINSTALLER_EXCLUDES: >-
+    --exclude-module PySide6.QtNetwork --exclude-module PySide6.QtQml
+    --exclude-module PySide6.QtQuick --exclude-module PySide6.QtQuickWidgets
+    --exclude-module PySide6.QtTest --exclude-module PySide6.QtSql
+    --exclude-module PySide6.QtXml --exclude-module PySide6.QtSvg
+    --exclude-module PySide6.QtOpenGL --exclude-module PySide6.QtOpenGLWidgets
+    --exclude-module PySide6.QtDBus --exclude-module PySide6.QtConcurrent
+    --exclude-module PySide6.QtUiTools --exclude-module PySide6.QtPdf
+    --exclude-module PySide6.QtPdfWidgets --exclude-module PySide6.QtDesigner
+    --exclude-module PySide6.QtHelp --exclude-module PySide6.QtWebSockets
+    --exclude-module PySide6.QtSerialPort --exclude-module PySide6.QtRemoteObjects
+    --exclude-module PySide6.QtStateMachine --exclude-module PySide6.QtScxml
+    --exclude-module PySide6.QtPositioning
+
 jobs:
   build:
     strategy:
@@ -12,6 +27,9 @@ jobs:
         include:
           - os: windows-latest
             suffix: windows-x86_64
+            ext: .exe
+          - os: windows-11-arm
+            suffix: windows-arm64
             ext: .exe
           - os: macos-latest
             suffix: macos-arm64
@@ -22,21 +40,25 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      # the Windows arm64 image ships its own arm64 Python
       - uses: actions/setup-python@v5
+        if: ${{ !(runner.os == 'Windows' && runner.arch == 'ARM64') }}
         with:
           python-version: '3.12'
-      - run: pip install pyinstaller chardet PySide6-Essentials
+      - run: python -m pip install pyinstaller chardet PySide6-Essentials
       - name: Install macOS native-effect deps
         if: runner.os == 'macOS'
-        run: pip install pyobjc-framework-Cocoa
+        run: python -m pip install pyobjc-framework-Cocoa
       - name: Build GUI (onefile, windowed)
+        shell: bash
         run: >
-          pyinstaller --onefile --windowed --name format-tex-gui
+          python -m PyInstaller --onefile --windowed --name format-tex-gui
           --distpath dist --workpath pyibuild --specpath pyibuild
-          format_tex_gui.py
+          $PYINSTALLER_EXCLUDES format_tex_gui.py
       - name: Build CLI (onefile)
+        shell: bash
         run: >
-          pyinstaller --onefile --name format-tex
+          python -m PyInstaller --onefile --name format-tex
           --distpath dist --workpath pyibuild --specpath pyibuild
           format_tex.py
       - name: Rename artifacts
@@ -44,6 +66,23 @@ jobs:
         run: |
           mv "dist/format-tex-gui${{ matrix.ext }}" "dist/format-tex-gui-${{ matrix.suffix }}${{ matrix.ext }}"
           mv "dist/format-tex${{ matrix.ext }}" "dist/format-tex-${{ matrix.suffix }}${{ matrix.ext }}"
+      - name: Build GUI onedir (Windows MSI payload)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          python -m PyInstaller --windowed --name format-tex-gui \
+            --distpath dist-onedir --workpath pyibuild --specpath pyibuild \
+            $PYINSTALLER_EXCLUDES format_tex_gui.py
+          mkdir -p payload
+          cp -R dist-onedir/format-tex-gui/. payload/
+          cp "dist/format-tex-${{ matrix.suffix }}.exe" payload/
+          ls payload | head
+      - name: Upload Windows MSI payload
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: msi-payload-${{ matrix.suffix }}
+          path: payload/
       - name: Patch macOS SDK claim (opt into Liquid Glass appearance)
         if: runner.os == 'macOS'
         shell: bash
@@ -68,3 +107,61 @@ jobs:
         with:
           name: format-tex-${{ matrix.suffix }}
           path: dist/*
+
+  windows-msi:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install WiX
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix
+          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+      - name: Determine MSI version
+        id: ver
+        shell: bash
+        run: |
+          ref='${{ github.ref_name }}'
+          if [[ "$ref" =~ ^v([0-9]+\.[0-9]+)(\.[0-9]+)?$ ]]; then
+            v="${BASH_REMATCH[1]}${BASH_REMATCH[2]:-.0}"
+          else
+            v="1.0.0"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "MSI version: $v"
+      - name: Download Windows payloads
+        uses: actions/download-artifact@v4
+        with:
+          pattern: msi-payload-*
+          path: payloads
+      - name: Build MSIs (per-user, x64 + arm64)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist-msi | Out-Null
+          foreach ($a in @(@{suffix='windows-x86_64'; arch='x64'},
+                           @{suffix='windows-arm64';  arch='arm64'})) {
+            $payload = (Resolve-Path "payloads/msi-payload-$($a.suffix)").Path
+            wix build packaging/windows/format-tex.wxs -arch $($a.arch) `
+              -d PayloadDir="$payload" `
+              -d Version="${{ steps.ver.outputs.version }}" `
+              -o "dist-msi/format-tex-$($a.suffix).msi"
+          }
+      - name: Verify MSI payload
+        shell: pwsh
+        run: |
+          foreach ($msi in Get-ChildItem dist-msi/*.msi) {
+            $tmp = Join-Path $env:TEMP $msi.BaseName
+            Start-Process msiexec -Wait -ArgumentList @(
+              '/a', "`"$($msi.FullName)`"", '/qn', "TARGETDIR=`"$tmp`"")
+            $exes = Get-ChildItem -Path $tmp -Recurse -Include format-tex-gui.exe,format-tex.exe
+            if ($exes.Count -lt 2) { throw "payload incomplete in $($msi.Name)" }
+            Write-Host "$($msi.Name): found $($exes.Count) executables"
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-msi
+          path: dist-msi/*.msi

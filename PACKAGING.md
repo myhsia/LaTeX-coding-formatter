@@ -56,10 +56,25 @@ PyInstaller 不支持跨平台编译, Windows/Linux 版本通过 CI 在对应系
    | 产物 | 内容 |
    |---|---|
    | `format-tex-windows-x86_64` | `format-tex-gui-windows-x86_64.exe`, `format-tex-windows-x86_64.exe` |
+   | `format-tex-windows-arm64`  | Windows on ARM (WOA, 如 Surface) 原生版本; **不兼容 x64** |
+   | `windows-msi`               | `format-tex-windows-x86_64.msi`, `format-tex-windows-arm64.msi` |
    | `format-tex-macos-arm64`    | 图形界面版与命令行版 (arm64) |
    | `format-tex-linux-x86_64`   | 图形界面版与命令行版 (x86_64) |
 
    每个平台的二进制在 CI 上均通过冒烟测试 (中文 English 中文 → 中文 English 中文)。
+
+### Windows 安装包 (MSI)
+
+* 两个 MSI 分别面向 x64 与 Windows on ARM (arm64); arm64 版本在 Surface 等
+  WOA 设备上原生运行, 性能更好. CI 使用 `windows-11-arm` 运行器构建 arm64
+  二进制 (**该运行器仅对公开仓库开放**), MSI 则在 x64 运行器上由 WiX 打包
+  (两种架构的负载分别下载后在同一个任务中打包).
+* MSI 为 **per-user 安装** (`%LOCALAPPDATA%\Programs\LaTeX Coding Style
+  Formatter`), 无需管理员权限/UAC, 并创建开始菜单快捷方式; 内含图形界面版的
+  onedir 目录 (启动更快) 与命令行版单文件 exe.
+* MSI 与各 exe 均**未签名**, 首次运行/安装时 Windows SmartScreen 可能提示
+  风险 (选择"更多信息 → 仍要运行"即可); 如需消除提示请配置代码签名证书.
+* 版本号取自推送的 `v*` 标签 (例如 `v1.0` → `1.0.0`), 手动触发时默认 `1.0.0`.
 
 ## 使用方法
 
