@@ -163,37 +163,54 @@ jobs:
       - name: Verify MSI contents
         shell: pwsh
         run: |
-          # read the MSI database (works for any architecture - an
-          # arm64 MSI cannot be admin-extracted on an x64 host)
+          $ErrorActionPreference = 'Stop'
           $expected = @('format-tex-gui.exe', 'format-tex.exe')
           $version = '${{ steps.ver.outputs.version }}'
+          $installer = New-Object -ComObject WindowsInstaller.Installer
           foreach ($msi in Get-ChildItem dist-msi/*.msi) {
-            $installer = New-Object -ComObject WindowsInstaller.Installer
+            # SummaryInformation property 7 = Template (package platform)
+            $summary = $installer.SummaryInformation($msi.FullName, 0)
+            $template = $summary.Property(7)
             $db = $installer.OpenDatabase($msi.FullName, 0)
-            $view = $db.OpenView('SELECT FileName FROM File')
-            $view.Execute()
-            $names = @()
-            while ($null -ne ($record = $view.Fetch())) {
-              $names += $record.StringData(1).Split('|')[0]
-            }
-            $view.Close()
             $pview = $db.OpenView(
               "SELECT Value FROM Property WHERE Property='ProductVersion'")
             $pview.Execute()
-            $prec = $pview.Fetch()
-            $product = $prec.StringData(1)
+            $product = $pview.Fetch().StringData(1)
             $pview.Close()
-            Write-Host ("{0}: {1} files, version {2}; first: {3}" -f
-              $msi.Name, $names.Count, $product,
-              (($names | Select-Object -First 5) -join ', '))
-            $missing = $expected | Where-Object { $names -notcontains $_ }
-            if ($missing) {
-              throw "$($msi.Name): missing $($missing -join ', ')"
-            }
             if ($product -ne $version) {
               throw "$($msi.Name): ProductVersion $product != $version"
             }
-            Write-Host "$($msi.Name): $($names.Count) files, version $product, expected executables present"
+            if ($msi.Name -like '*arm64*') {
+              # an arm64 MSI cannot be admin-extracted on an x64 host, so
+              # read the File table; names are stored as short|long
+              $fview = $db.OpenView('SELECT FileName FROM File')
+              $fview.Execute()
+              $names = @(); $raw = @(); $count = 0
+              while ($null -ne ($record = $fview.Fetch())) {
+                $value = $record.StringData(1)
+                if ($raw.Count -lt 3) { $raw += $value }
+                foreach ($part in $value.Split('|')) { $names += $part }
+                $count++
+              }
+              $fview.Close()
+              Write-Host ("  {0} files; template '{1}'; raw FileName: {2}" -f
+                $count, $template, ($raw -join ' ; '))
+              $lower = $names | ForEach-Object { $_.ToLowerInvariant() }
+              $missing = $expected | Where-Object { $lower -notcontains $_ }
+            } else {
+              $tmp = Join-Path $env:TEMP $msi.BaseName
+              Start-Process msiexec -Wait -ArgumentList @(
+                '/a', "`"$($msi.FullName)`"", '/qn', "TARGETDIR=`"$tmp`"")
+              $found = @(Get-ChildItem -Path $tmp -Recurse -File |
+                ForEach-Object { $_.Name.ToLowerInvariant() })
+              Write-Host ("  {0} files extracted; template '{1}'" -f
+                $found.Count, $template)
+              $missing = $expected | Where-Object { $found -notcontains $_ }
+            }
+            if ($missing) {
+              throw "$($msi.Name): missing $($missing -join ', ')"
+            }
+            Write-Host "$($msi.Name): verified (version $product)"
           }
       - uses: actions/upload-artifact@v4
         with:
