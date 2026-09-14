@@ -25,7 +25,8 @@ from PySide6.QtGui import QAction, QColor, QDropEvent, QFont, \
     QFontDatabase, QFontMetrics, QKeySequence, QPalette, \
     QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
-                               QComboBox, QFileDialog, QFrame, QHBoxLayout,
+                               QComboBox, QFileDialog, QFrame, QGridLayout,
+                               QHBoxLayout,
                                QInputDialog, QLabel, QListWidget,
                                QListWidgetItem,
                                QMainWindow, QMessageBox, QPlainTextEdit,
@@ -387,17 +388,15 @@ class MainWindow(QMainWindow):
         splitter.setSizes([240, 740])
         splitter.splitterMoved.connect(self._splitter_moved)
         self.content_panel = panel
+        panel.installEventFilter(self)
         outer.addWidget(splitter, 1)
 
-        options = QLabel('选项:')
-        layout.addWidget(options)
-        grid = QHBoxLayout()
-        col1 = QVBoxLayout()
-        col2 = QVBoxLayout()
-        col3 = QVBoxLayout()
-        self.chk_punct = QCheckBox('半角标点前后加空格')
+        # option checkboxes reflow between 2 rows x 3 columns and
+        # 3 rows x 2 columns depending on the panel width (see
+        # _reflow_options); columns share the width equally
+        self.chk_punct = QCheckBox('半角标点后加空格')
         self.chk_punct.setChecked(True)
-        self.chk_commands = QCheckBox('CJK 与命令之间加空格')
+        self.chk_commands = QCheckBox('CJK 与控制序列空格')
         self.chk_commands.setChecked(True)
         self.chk_tight = QCheckBox('页码范围保持紧凑')
         self.chk_tight.setChecked(True)
@@ -406,14 +405,13 @@ class MainWindow(QMainWindow):
         self.chk_magic = QCheckBox('添加编码魔法注释')
         self.chk_magic.setChecked(True)
         self.chk_check = QCheckBox('仅检查 (不写入文件)')
-        for w in (self.chk_punct, self.chk_tight, self.chk_magic):
-            col1.addWidget(w)
-        for w in (self.chk_commands, self.chk_backup, self.chk_check):
-            col2.addWidget(w)
-        grid.addLayout(col1)
-        grid.addLayout(col2)
-        grid.addStretch(1)
-        layout.addLayout(grid)
+        self.option_checks = [self.chk_punct, self.chk_commands,
+                              self.chk_tight, self.chk_backup,
+                              self.chk_magic, self.chk_check]
+        self.options_grid = QGridLayout()
+        self.options_grid.setContentsMargins(0, 0, 0, 0)
+        self._option_columns = 0
+        layout.addLayout(self.options_grid)
 
         enc = QHBoxLayout()
         enc.addWidget(QLabel('输出编码'))
@@ -461,6 +459,7 @@ class MainWindow(QMainWindow):
         self._effects_applied = False
         self._notes_seen = 0
         prepare_qt(self)
+        self._reflow_options()
         # menus last: creating the menu bar triggers window events
         self._build_menus()
 
@@ -482,7 +481,38 @@ class MainWindow(QMainWindow):
 
     def _splitter_moved(self, *_args):
         self._sync_sidebar_width()
+        self._reflow_options()
         reposition_materials(self)
+
+    def _reflow_options(self):
+        """Lay the option checkboxes out as 2 rows x 3 columns or
+        3 rows x 2 columns, whichever fits the panel width; columns share
+        the width equally and spread across the panel."""
+        if not self.option_checks:
+            return
+        spacing = self.options_grid.spacing()
+        widest = max(chk.sizeHint().width() for chk in self.option_checks)
+        available = self.content_panel.width() - 24      # panel margins
+        if available <= 0:
+            available = self.width() - self.sidebar.width() - 24
+        need_three = widest * 3 + spacing * 2 + 16
+        columns = 3 if available >= need_three else 2
+        if columns != self._option_columns:
+            self._option_columns = columns
+            for chk in self.option_checks:
+                self.options_grid.removeWidget(chk)
+            for index, chk in enumerate(self.option_checks):
+                self.options_grid.addWidget(chk, index // columns,
+                                            index % columns)
+        # equal-width columns: same minimum for each column in use and a
+        # stretch of 1, so the leftover space is shared evenly too
+        column_width = max(widest, available // columns)
+        for column in range(len(self.option_checks)):
+            used = column < columns
+            self.options_grid.setColumnMinimumWidth(
+                column, column_width if used else 0)
+            self.options_grid.setColumnStretch(column, 1 if used else 0)
+        self.options_grid.invalidate()
 
     def _build_menus(self):
         """macOS menu bar, so the standard shortcuts work and are
@@ -596,6 +626,14 @@ class MainWindow(QMainWindow):
     def _bring_all_to_front(self):
         arrange_in_front(self)
 
+    def eventFilter(self, obj, event):
+        # the panel's width changes on splitter drags without a window
+        # resize, and splitterMoved fires before the new sizes are
+        # applied - so reflow from the panel's own resize event
+        if obj is self.content_panel and event.type() == QEvent.Type.Resize:
+            self._reflow_options()
+        return super().eventFilter(obj, event)
+
     def _sync_sidebar_width(self):
         """Tell the native layer where the sidebar ends: the boundary is
         the content panel's left edge (which also covers the splitter's
@@ -608,6 +646,7 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._sync_sidebar_width()
+        self._reflow_options()
         reposition_materials(self)
 
     def changeEvent(self, event):
@@ -621,6 +660,7 @@ class MainWindow(QMainWindow):
             self.content_panel.layout().setContentsMargins(
                 12, top + 12, 12, 12)
             self._sync_sidebar_width()
+            self._reflow_options()
             reposition_materials(self)
 
     def apply_window_effects(self):
@@ -1131,6 +1171,42 @@ class MainWindow(QMainWindow):
             lines.append('backups mirror the root under backup/ and are '
                          'refreshed: {}'.format(bak_ok))
             ok = ok and bak_ok
+
+            # option checkboxes: no heading, reflow 2x3 <-> 3x2 by
+            # width, equally wide columns spread across the panel
+            def option_layout():
+                grid = self.options_grid
+                cells = {(grid.getItemPosition(grid.indexOf(c))[0],
+                          grid.getItemPosition(grid.indexOf(c))[1])
+                         for c in self.option_checks}
+                rows = len({r for r, _ in cells})
+                cols = len({c for _, c in cells})
+                widths = [grid.cellRect(0, c).width() for c in range(cols)]
+                return rows, cols, widths
+
+            no_heading = not any(
+                lbl.text().startswith('选项')
+                for lbl in self.content_panel.findChildren(QLabel))
+            self.resize(1200, 700)
+            QApplication.processEvents()
+            wide_rows, wide_cols, wide_w = option_layout()
+            self.splitter.setSizes([720, 480])       # squeeze the panel
+            QApplication.processEvents()
+            narrow_rows, narrow_cols, narrow_w = option_layout()
+            equal = (max(wide_w) - min(wide_w) <= 1
+                     and max(narrow_w) - min(narrow_w) <= 1)
+            options_ok = (no_heading
+                          and (wide_rows, wide_cols) == (2, 3)
+                          and (narrow_rows, narrow_cols) == (3, 2)
+                          and equal
+                          and all(c.isVisible() for c in self.option_checks))
+            lines.append('options: no heading {}, reflow {}x{} <-> {}x{}, '
+                         'equal columns {}: {}'.format(
+                             no_heading, wide_rows, wide_cols,
+                             narrow_rows, narrow_cols, equal, options_ok))
+            ok = ok and options_ok
+            self.splitter.setSizes([240, 740])
+            QApplication.processEvents()
 
             # --- menu bar: standard commands, so Cmd+W etc. work ---
             menus = [a.text().replace('&', '')
