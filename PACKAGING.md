@@ -99,6 +99,19 @@ PyInstaller 不支持跨平台编译, Windows/Linux 版本通过 CI 在对应系
   `diskutil image create from`, `detach`→`diskutil eject` 等), 因此仓库内
   已不再使用 `hdiutil`; 本方案只依赖 `diskutil image` (macOS 26 起可用).
 
+### 备份位置 (backup/)
+
+* 默认在**被扫描根目录**下建立 `backup/` 文件夹, 并按源文件相对路径镜像存放
+  `.bak`: 例如 `format-tex --recursive proj` 会得到
+  `proj/backup/sub/a.tex.bak`; 单独指定的文件则以该文件所在目录为根
+  (`dir/backup/name.tex.bak`)。图形界面同理: "选择目录"/拖入文件夹时以该
+  文件夹为根, 单独选择/拖入的文件以各自所在目录为根。
+* 备份**每次运行都会刷新** (覆盖旧备份), 且仅在文件确实需要改动时创建;
+  `--check`/仅检查模式不写任何文件。若备份失败 (如目录不可写), 该文件**不会**
+  被修改, 其余文件继续处理。
+* 备份文件后缀为 `.bak`, 因此后续扫描不会把 `backup/` 里的备份当作待处理文件;
+  关闭备份可用命令行 `--no-backup` 或取消勾选 "生成备份文件 (backup/*.bak)"。
+
 ### macOS 菜单与快捷键
 
 * 菜单栏由 Qt 的 `QMenuBar` 提供 (显示在系统菜单栏), 含三组菜单:
@@ -178,12 +191,12 @@ GUI: 点击文件列表区的 "选择文件"（可多选）或 "选择目录" �
 输入框选择任意编码 (如 utf-8) 统一转换。
 按需勾选选项 ("添加编码魔法注释" 默认勾选, 会在文件缺失
 `% !TeX encoding` 注释时自动添加),
-"预览差异" 查看将做的修改, "应用格式化" 写回文件 (默认生成 `.bak` 备份)。
+"预览差异" 查看将做的修改, "应用格式化" 写回文件 (默认生成备份, 见下)。
 
 命令行:
 
 ```bash
-format-tex file.tex                # 就地格式化 (生成 .bak 备份)
+format-tex file.tex                # 就地格式化 (备份到 backup/file.tex.bak)
 format-tex --check file.tex        # 只报告, 不写入
 format-tex --no-magic-comment file.tex     # 不添加魔法注释
 format-tex --input-encoding gb2312 file.ctx   # 覆盖自动检测的输入编码

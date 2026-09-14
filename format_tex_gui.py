@@ -27,12 +27,14 @@ from PySide6.QtGui import QAction, QColor, QDropEvent, QFont, \
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
                                QComboBox, QFileDialog, QFrame, QHBoxLayout,
                                QInputDialog, QLabel, QListWidget,
+                               QListWidgetItem,
                                QMainWindow, QMessageBox, QPlainTextEdit,
                                QPushButton, QSplitter, QStyle,
                                QStyleOptionComboBox, QVBoxLayout,
                                QWidget)
 
-from format_tex import FormatOptions, format_file, scan_directory
+from format_tex import (FormatOptions, backup_path, format_file,
+                        make_backup, scan_directory)
 from native_menu import (CUSTOM_SENTINEL, build_menu, menu_entries,
                          popup_native_menu)
 from platform_effects import (apply_effects, arrange_in_front,
@@ -399,7 +401,7 @@ class MainWindow(QMainWindow):
         self.chk_commands.setChecked(True)
         self.chk_tight = QCheckBox('页码范围保持紧凑')
         self.chk_tight.setChecked(True)
-        self.chk_backup = QCheckBox('生成备份文件 (.bak)')
+        self.chk_backup = QCheckBox('生成备份文件 (backup/*.bak)')
         self.chk_backup.setChecked(True)
         self.chk_magic = QCheckBox('添加编码魔法注释')
         self.chk_magic.setChecked(True)
@@ -1098,7 +1100,37 @@ class MainWindow(QMainWindow):
             lines.append('placeholder hidden after files: {}'.format(
                 placeholder_hidden))
             ok = ok and gained >= 2 and placeholder_hidden
+            # dropped files remember the folder they were scanned from,
+            # so backups can mirror it under <root>/backup
+            roots_ok = all(
+                self.file_list.item(i).data(Qt.ItemDataRole.UserRole)
+                == str(drop_dir)
+                for i in range(self.file_list.count()))
+            lines.append('dropped files remember their scanned root: {}'
+                         .format(roots_ok))
+            ok = ok and roots_ok
             shutil.rmtree(drop_dir, ignore_errors=True)
+
+            # backups mirror the scanned root and are refreshed each run
+            import tempfile
+            with tempfile.TemporaryDirectory(prefix='fmt_gui_bak_') as tmp:
+                root = Path(tmp) / 'proj'
+                nested = root / 'sub' / 'a.tex'
+                nested.parent.mkdir(parents=True)
+                nested.write_text('one\n', encoding='utf-8')
+                target = backup_path(nested, root)
+                first = make_backup(nested, root)
+                nested.write_text('two\n', encoding='utf-8')
+                again = make_backup(nested, root)
+                loose_target = backup_path(Path(tmp) / 'loose.tex')
+                bak_ok = (target == root / 'backup' / 'sub' / 'a.tex.bak'
+                          and first == target == again
+                          and target.read_text(encoding='utf-8') == 'two\n'
+                          and loose_target
+                          == Path(tmp) / 'backup' / 'loose.tex.bak')
+            lines.append('backups mirror the root under backup/ and are '
+                         'refreshed: {}'.format(bak_ok))
+            ok = ok and bak_ok
 
             # --- menu bar: standard commands, so Cmd+W etc. work ---
             menus = [a.text().replace('&', '')
@@ -1189,14 +1221,24 @@ class MainWindow(QMainWindow):
         value = self.enc_out.currentText().strip()
         return None if (not value or value == '同输入') else value
 
-    def _add_paths(self, paths):
+    def _add_paths(self, paths, root=None):
+        """Add paths (str or (str, root) pairs), remembering the scanned
+        root each file came from: backups then mirror the source layout
+        under <root>/backup. Loose files use their own directory."""
         existing = {self.file_list.item(i).text()
                     for i in range(self.file_list.count())}
         added = 0
-        for name in paths:
-            if name not in existing:
-                self.file_list.addItem(name)
-                added += 1
+        for entry in paths:
+            name, file_root = entry if root is None and isinstance(
+                entry, tuple) else (entry, root)
+            if name in existing:
+                continue
+            item = QListWidgetItem(name)
+            item.setData(Qt.ItemDataRole.UserRole,
+                         str(file_root or Path(name).parent))
+            self.file_list.addItem(item)
+            existing.add(name)
+            added += 1
         self.set_status('已选择 {} 个文件 (新增 {} 个)'.format(
             self.file_list.count(), added))
         return added
@@ -1225,7 +1267,7 @@ class MainWindow(QMainWindow):
         except Exception:
             self.show_error(traceback.format_exc())
             return
-        self._add_paths([str(p) for p in matches])
+        self._add_paths([(str(p), directory) for p in matches])
 
     def drop_paths(self, paths):
         """Handle paths dropped onto the file list: loose files are
@@ -1244,12 +1286,12 @@ class MainWindow(QMainWindow):
                     for m in scan_directory(path, ext, recursive):
                         if str(m) not in seen:
                             seen.add(str(m))
-                            collected.append(str(m))
+                            collected.append((str(m), str(path)))
                 elif path.is_file():
                     n_files += 1
                     if str(path) not in seen:
                         seen.add(str(path))
-                        collected.append(str(path))
+                        collected.append((str(path), str(path.parent)))
             added = self._add_paths(collected)
             self.set_status(
                 '拖入 {} 个文件、{} 个目录: 新增 {} 个文件 (共 {} 个)'.format(
@@ -1269,9 +1311,13 @@ class MainWindow(QMainWindow):
             self.show_error(traceback.format_exc())
 
     def _run(self, write):
-        paths = [Path(self.file_list.item(i).text())
-                 for i in range(self.file_list.count())]
-        if not paths:
+        entries = []
+        for i in range(self.file_list.count()):
+            item = self.file_list.item(i)
+            root = item.data(Qt.ItemDataRole.UserRole)
+            entries.append((Path(item.text()),
+                            Path(root) if root else None))
+        if not entries:
             self.set_status('请先选择 TeX 文件')
             return
         opts = FormatOptions(
@@ -1284,10 +1330,10 @@ class MainWindow(QMainWindow):
         )
 
         results = []
-        for path in paths:
-            entry = {'path': path, 'count': 0, 'changed': False,
-                     'error': None, 'diff': [], 'result': None,
-                     'read_enc': None}
+        for path, root in entries:
+            entry = {'path': path, 'root': root, 'count': 0,
+                     'changed': False, 'error': None, 'diff': [],
+                     'result': None, 'read_enc': None}
             if not path.is_file():
                 entry['error'] = '文件不存在'
             else:
@@ -1345,12 +1391,18 @@ class MainWindow(QMainWindow):
                         out_enc, exc))
                     write_errors += 1
                     continue
-                if opts.backup:
-                    backup = e['path'].with_name(e['path'].name + '.bak')
-                    if not backup.exists():
-                        shutil.copy2(e['path'], backup)
-                with open(e['path'], 'wb') as fh:
-                    fh.write(data)
+                try:
+                    if opts.backup:
+                        backup = make_backup(e['path'], e.get('root'))
+                        self.append('>>> 备份: {}\n'.format(backup))
+                    with open(e['path'], 'wb') as fh:
+                        fh.write(data)
+                except OSError as exc:
+                    # never modify a file we could not back up
+                    self.append('错误: 无法写入 (备份失败?): {}\n\n'.format(
+                        exc))
+                    write_errors += 1
+                    continue
                 self.append('>>> 已写入 ({}, {} 处插入)\n\n'.format(
                     out_enc, e['count']))
             else:

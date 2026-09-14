@@ -112,6 +112,17 @@ jobs:
           printf '\xe4\xb8\xad\xe6\x96\x87English\xe4\xb8\xad\xe6\x96\x87\n' > smoke.tex
           ./dist/format-tex-${{ matrix.suffix }}${{ matrix.ext }} --no-backup smoke.tex
           grep -q $'\xe4\xb8\xad\xe6\x96\x87 English \xe4\xb8\xad\xe6\x96\x87' smoke.tex
+          # backups mirror the scanned root under <root>/backup
+          mkdir -p smoke-root/sub
+          printf '\xe4\xb8\xad\xe6\x96\x87English\xe4\xb8\xad\xe6\x96\x87\n' \
+            > smoke-root/sub/t.tex
+          ./dist/format-tex-${{ matrix.suffix }}${{ matrix.ext }} --recursive smoke-root
+          test -f smoke-root/backup/sub/t.tex.bak
+          test ! -f smoke-root/sub/t.tex.bak
+          grep -q $'\xe4\xb8\xad\xe6\x96\x87English\xe4\xb8\xad\xe6\x96\x87' \
+            smoke-root/backup/sub/t.tex.bak
+          grep -q $'\xe4\xb8\xad\xe6\x96\x87 English \xe4\xb8\xad\xe6\x96\x87' \
+            smoke-root/sub/t.tex
       - name: GUI self-test (macOS)
         if: runner.os == 'macOS'
         shell: bash

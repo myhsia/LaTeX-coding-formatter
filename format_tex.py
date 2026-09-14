@@ -29,6 +29,8 @@ consoles and pipes (cp1252).
 Usage
 -----
     python3 format_tex.py file.tex [more.tex ...]          format in place
+                          (original kept as backup/<name>.bak next to
+                          the scanned root; see <root>/backup/...)
     python3 format_tex.py --check file.tex [more.tex ...]  report only
     python3 format_tex.py --no-punct --no-commands --loose-ranges
                           --no-backup file.tex             toggle rule sets
@@ -157,6 +159,9 @@ def add_magic_comment(text, encoding):
         return text, False
     nl = '\r\n' if '\r\n' in text[:200] else '\n'
     return '% !TeX encoding = {}{}'.format(encoding, nl) + text, True
+
+
+BACKUP_DIRNAME = 'backup'
 
 
 @dataclass
@@ -302,7 +307,32 @@ def format_file(path, opts=None):
     return source, result, count, read_enc
 
 
-def process_file(path, check, opts=None):
+def backup_path(path, root=None):
+    """Where the backup copy of ``path`` goes: ``<root>/backup/<relative
+    path>.bak``, mirroring subdirectories. ``root`` is the scanned root
+    the file came from (a directory argument, or a dropped/selected
+    folder); it defaults to the file's own directory, so a loose file
+    gets ``<dir>/backup/<name>.bak``."""
+    path = Path(path)
+    root = Path(root) if root is not None else path.parent
+    try:
+        rel = path.relative_to(root)
+    except ValueError:
+        rel = Path(path.name)
+    return root / BACKUP_DIRNAME / rel.parent / (path.name + '.bak')
+
+
+def make_backup(path, root=None):
+    """Refresh the backup copy of ``path`` (created on demand, always
+    overwritten), mirroring the source layout inside the backup folder.
+    Returns the backup path; raises OSError on failure."""
+    target = backup_path(path, root)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(path, target)
+    return target
+
+
+def process_file(path, check, opts=None, root=None):
     opts = opts or FormatOptions()
     try:
         source, result, count, read_enc = format_file(path, opts)
@@ -338,13 +368,17 @@ def process_file(path, check, opts=None):
             print('{}: ERROR: cannot encode output as {}: {}'.format(
                 path, out_enc, exc))
             return True, False
-        if opts.backup:
-            backup = path.with_name(path.name + '.bak')
-            if not backup.exists():
-                shutil.copy2(path, backup)
+        try:
+            if opts.backup:
+                backup = make_backup(path, root)
                 print('{}: original saved to {}'.format(path, backup))
-        with open(path, 'wb') as fh:
-            fh.write(data)
+            with open(path, 'wb') as fh:
+                fh.write(data)
+        except OSError as exc:
+            # never modify a file we could not back up; keep the batch going
+            print('{}: ERROR: cannot write (backup failed?): {}'.format(
+                path, exc))
+            return True, False
         if read_enc == out_enc:
             print('{}: written as {}'.format(path, out_enc))
         else:
@@ -377,21 +411,28 @@ def scan_directory(directory, ext, recursive=False):
     return sorted(matches)
 
 
-def expand_targets(paths, ext, recursive=False):
+def expand_targets(paths, ext, recursive=False, with_roots=False):
     """Expand directories among ``paths`` into scanned files, keeping
-    plain files as-is; deduplicates while preserving order."""
+    plain files as-is; deduplicates while preserving order.
+
+    With ``with_roots`` the result is a list of ``(path, root)`` pairs,
+    where ``root`` is the directory the file was scanned from (a
+    directory argument, or the file's own directory for plain files).
+    Backups mirror the source layout under ``<root>/backup``."""
     targets = []
     seen = set()
     for path in paths:
         if path.is_dir():
+            root = path
             candidates = scan_directory(path, ext, recursive)
         else:
+            root = path.parent
             candidates = [path]
         for cand in candidates:
             key = str(cand)
             if key not in seen:
                 seen.add(key)
-                targets.append(cand)
+                targets.append((cand, root) if with_roots else cand)
     return targets
 
 
@@ -412,7 +453,8 @@ def main(argv=None):
     parser.add_argument('--loose-ranges', action='store_true',
                         help='space page-range dashes too (1820 $-$ 1830)')
     parser.add_argument('--no-backup', action='store_true',
-                        help='do not create a .bak backup before writing')
+                        help='do not write backups into the backup/ '
+                             'folder')
     parser.add_argument('--no-magic-comment', action='store_true',
                         help='do not add "%% !TeX encoding" magic comments '
                              '(default: add when missing)')
@@ -440,18 +482,19 @@ def main(argv=None):
         write_encoding=args.output_encoding,
     )
 
-    targets = expand_targets(args.files, args.extension, args.recursive)
+    targets = expand_targets(args.files, args.extension, args.recursive,
+                             with_roots=True)
     if not targets:
         print('no files found (check --extension / --recursive)')
         return 1
 
     code = 0
-    for path in targets:
+    for path, root in targets:
         if not path.is_file():
             print('{}: ERROR: no such file'.format(path))
             code = 1
             continue
-        error, changed = process_file(path, args.check, opts)
+        error, changed = process_file(path, args.check, opts, root=root)
         if error or (changed and args.check):
             code = 1
     return code
