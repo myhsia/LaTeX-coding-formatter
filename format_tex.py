@@ -398,11 +398,14 @@ def _use_utf8_stdio():
 
 def scan_directory(directory, ext, recursive=False):
     """Return files under ``directory`` whose suffix matches ``ext``
-    (case-insensitive), sorted. ``ext`` may be given with or without
-    the leading dot; ``recursive`` includes subdirectories."""
+    (case-insensitive), sorted. ``ext`` may be a suffix (``tex``,
+    ``.tex``) or a glob (``*.tex``, which is what the GUI's extension
+    menu holds); ``recursive`` includes subdirectories."""
     ext = ext.strip()
     if not ext:
         ext = '.tex'
+    if ext.startswith('*'):
+        ext = ext[1:]              # '*.tex' -> '.tex'
     if not ext.startswith('.'):
         ext = '.' + ext
     entries = directory.rglob('*') if recursive else directory.iterdir()

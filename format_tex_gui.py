@@ -54,7 +54,7 @@ from platform_effects import (apply_effects, arrange_in_front,
 
 ENCODINGS = ['同输入', 'utf-8', 'gb18030', 'gbk', 'gb2312', 'big5',
              'utf-16', 'latin-1']
-EXTENSIONS = ['.tex', '.ctx', '.sty', '.cls', '.txt']
+EXTENSIONS = ['*.tex', '*.ctx', '*.sty', '*.cls', '*.dtx', '*.txt']
 
 LIGHT = {
     'text_bg': '#fafafa', 'text_fg': '#1a1a1a',
@@ -361,10 +361,25 @@ class MainWindow(QMainWindow):
         slayout.addWidget(self.btn_clear)
         self.file_list = DropListWidget(self.drop_paths, self.add_files,
                                         self.scan_dir)
+        # the list itself stays transparent over the sidebar material, but
+        # selected rows are highlighted (Finder-like tint); multi-select:
+        # Cmd-click toggles, Shift-click extends a range
+        self.file_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection)
         self.file_list.setStyleSheet(
-            'QListWidget { background: transparent; }'
-            'QListWidget::item { background: transparent; }')
+            'QListWidget {{ background: transparent; }}'
+            'QListWidget::item {{ background: transparent;'
+            ' padding: 4px 6px; border-radius: 6px; }}'
+            'QListWidget::item:hover {{'
+            ' background: rgba(120, 120, 128, 0.12); }}'
+            'QListWidget::item:selected {{'
+            ' background: rgba(120, 120, 128, 0.32);'
+            ' color: {}; }}'
+            'QListWidget::item:selected:!active {{'
+            ' background: rgba(120, 120, 128, 0.16); }}'.format(
+                self.palette().color(QPalette.ColorRole.WindowText).name()))
         self.file_list.viewport().setAutoFillBackground(False)
+        self.file_list.itemSelectionChanged.connect(self._preview_selection)
         slayout.addWidget(self.file_list, 1)
         self.sidebar = sidebar
         splitter.addWidget(sidebar)
@@ -424,11 +439,10 @@ class MainWindow(QMainWindow):
         layout.addLayout(enc)
 
         actions = QHBoxLayout()
-        self.btn_preview = QPushButton('预览差异')
-        self.btn_preview.clicked.connect(lambda: self.run(write=False))
+        # no preview button: selecting an item in the file list previews
+        # its diff automatically, and "应用格式化" writes the selection
         self.btn_apply = QPushButton('应用格式化')
         self.btn_apply.clicked.connect(lambda: self.run(write=True))
-        actions.addWidget(self.btn_preview)
         actions.addWidget(self.btn_apply)
         actions.addStretch(1)
         layout.addLayout(actions)
@@ -1172,6 +1186,59 @@ class MainWindow(QMainWindow):
                          'refreshed: {}'.format(bak_ok))
             ok = ok and bak_ok
 
+            # --- selection drives preview and apply ---
+            import tempfile
+            seltmp = Path(tempfile.mkdtemp(prefix='fmt_gui_sel_'))
+            f1 = seltmp / 'one.tex'
+            f2 = seltmp / 'two.tex'
+            f1.write_text('中文English中文\n', encoding='utf-8')
+            f2.write_text('中文English中文\n', encoding='utf-8')
+            self.file_list.clear()
+            self.file_list.clearSelection()
+            self._add_paths([(str(f1), str(seltmp)),
+                             (str(f2), str(seltmp))])
+            QApplication.processEvents()
+            mode_ok = (self.file_list.selectionMode()
+                       == QAbstractItemView.SelectionMode.ExtendedSelection)
+            button_ok = (not hasattr(self, 'btn_preview')
+                         and hasattr(self, 'btn_apply'))
+            # select only the second item: only its diff is shown
+            self.file_list.clearSelection()
+            self.file_list.item(1).setSelected(True)
+            QApplication.processEvents()
+            only_second = (str(f2) in self.output.toPlainText()
+                           and str(f1) not in self.output.toPlainText())
+            # selecting both shows both (Cmd/Shift-style multi-select)
+            self.file_list.item(0).setSelected(True)
+            QApplication.processEvents()
+            both = (str(f1) in self.output.toPlainText()
+                    and str(f2) in self.output.toPlainText())
+            # the selection highlight is drawn by a stylesheet rule; item
+            # backgrounds are not captured by grab(), so check the rule
+            sheet = self.file_list.styleSheet()
+            highlight_ok = (':selected' in sheet and 'rgba' in sheet
+                            and 'border-radius' in sheet)
+            # applying writes only the selected file
+            self.file_list.clearSelection()
+            self.file_list.item(1).setSelected(True)
+            QApplication.processEvents()
+            self._run(write=True, confirm=False)
+            QApplication.processEvents()
+            apply_ok = ('中文 English 中文' in f2.read_text(encoding='utf-8')
+                        and f1.read_text(encoding='utf-8')
+                        == '中文English中文\n'
+                        and (seltmp / 'backup' / 'two.tex.bak').is_file())
+            sel_ok = (mode_ok and button_ok and only_second and both
+                      and highlight_ok and apply_ok)
+            lines.append('selection: multi-select {}, no preview button {}, '
+                         'preview follows selection {}, row highlight {}, '
+                         'apply only the selection {}: {}'.format(
+                             mode_ok, button_ok, only_second and both,
+                             highlight_ok, apply_ok, sel_ok))
+            ok = ok and sel_ok
+            shutil.rmtree(seltmp, ignore_errors=True)
+            self.file_list.clear()
+
             # option checkboxes: no heading, reflow 2x3 <-> 3x2 by
             # width, equally wide columns spread across the panel
             def option_layout():
@@ -1304,6 +1371,7 @@ class MainWindow(QMainWindow):
         existing = {self.file_list.item(i).text()
                     for i in range(self.file_list.count())}
         added = 0
+        first_added = None
         for entry in paths:
             name, file_root = entry if root is None and isinstance(
                 entry, tuple) else (entry, root)
@@ -1315,6 +1383,10 @@ class MainWindow(QMainWindow):
             self.file_list.addItem(item)
             existing.add(name)
             added += 1
+            if first_added is None:
+                first_added = item
+        if first_added is not None and not self.file_list.selectedItems():
+            self.file_list.setCurrentItem(first_added)   # triggers preview
         self.set_status('已选择 {} 个文件 (新增 {} 个)'.format(
             self.file_list.count(), added))
         return added
@@ -1386,17 +1458,20 @@ class MainWindow(QMainWindow):
         except Exception:
             self.show_error(traceback.format_exc())
 
-    def _run(self, write):
+    def _selected_entries(self):
+        """(path, root) for the selected list items, in list order."""
         entries = []
         for i in range(self.file_list.count()):
             item = self.file_list.item(i)
+            if not item.isSelected():
+                continue
             root = item.data(Qt.ItemDataRole.UserRole)
             entries.append((Path(item.text()),
                             Path(root) if root else None))
-        if not entries:
-            self.set_status('请先选择 TeX 文件')
-            return
-        opts = FormatOptions(
+        return entries
+
+    def _format_options(self):
+        return FormatOptions(
             punct=self.chk_punct.isChecked(),
             commands=self.chk_commands.isChecked(),
             tight_ranges=self.chk_tight.isChecked(),
@@ -1405,6 +1480,26 @@ class MainWindow(QMainWindow):
             write_encoding=self.write_encoding(),
         )
 
+    def _run(self, write, confirm=True):
+        entries = self._selected_entries()
+        if not entries:
+            self.set_status('请先选择文件')
+            return
+        opts = self._format_options()
+        self._render(self._collect(entries, opts), write, opts, confirm)
+
+    def _preview_selection(self):
+        """Show the diff of the current selection (never writes). Called
+        whenever the file list selection changes."""
+        entries = self._selected_entries()
+        if not entries:
+            self.clear_output()
+            self.set_status('点击文件列表条目即可预览差异')
+            return
+        opts = self._format_options()
+        self._render(self._collect(entries, opts), False, opts)
+
+    def _collect(self, entries, opts):
         results = []
         for path, root in entries:
             entry = {'path': path, 'root': root, 'count': 0,
@@ -1426,10 +1521,12 @@ class MainWindow(QMainWindow):
                 except Exception as exc:
                     entry['error'] = '{}: {}'.format(type(exc).__name__, exc)
             results.append(entry)
+        return results
 
+    def _render(self, results, write, opts, confirm=True):
         will_write = write and not self.chk_check.isChecked()
         n_change = sum(1 for e in results if e['changed'])
-        if will_write and n_change and QMessageBox.question(
+        if will_write and n_change and confirm and QMessageBox.question(
                 self, '确认', '将修改 {} 个文件, 是否继续?'.format(
                     n_change)) != QMessageBox.StandardButton.Yes:
             will_write = False
