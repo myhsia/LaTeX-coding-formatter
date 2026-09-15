@@ -153,6 +153,14 @@ jobs:
           "$GITHUB_WORKSPACE/dist/format-tex-gui-macos-arm64" --self-test
           cat format_tex_mac_selftest.txt
           grep -q '^PASS' format_tex_mac_selftest.txt
+      - name: GUI self-test (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p /tmp/guiselftest && cd /tmp/guiselftest
+          "$GITHUB_WORKSPACE/dist/format-tex-gui-${{ matrix.suffix }}.exe" --self-test
+          cat format_tex_gui_selftest.txt
+          grep -q '^PASS' format_tex_gui_selftest.txt
       - name: Build DMG (macOS)
         if: runner.os == 'macOS'
         shell: bash
