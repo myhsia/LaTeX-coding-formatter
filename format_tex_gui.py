@@ -1340,11 +1340,18 @@ class MainWindow(QMainWindow):
                 multi_ok = bool(table.allowsMultipleSelection())
                 model_ok = (self.files_view.count() == 2
                             and table.numberOfRows() == 2)
+                # separators come from our per-row view (the solid grid
+                # mask would also paint the empty area below the rows)
+                row_view = self.files_view.view._datasource \
+                    .tableView_rowViewForRow_(table, 0)
+                from native_mac import filelist as _fl
                 style_ok = (table.style() == AppKit.NSTableViewStylePlain
                             and table.gridStyleMask()
-                            == AppKit.NSTableViewSolidHorizontalGridLineMask
+                            == AppKit.NSTableViewGridNone
                             and table.selectionHighlightStyle()
-                            == AppKit.NSTableViewSelectionHighlightStyleRegular)
+                            == AppKit.NSTableViewSelectionHighlightStyleRegular
+                            and row_view is not None
+                            and _fl.row_separator_error() is None)
                 cell = self.files_view.view.cell_view(1)
                 cell_ok = (cell is not None
                            and cell.imageView() is not None
@@ -1378,7 +1385,8 @@ class MainWindow(QMainWindow):
                               and fits_ok)
                 lines.append(
                     'native file list: NSTableView rows {} == model {}, '
-                    'plain style + solid grid + regular highlight {}, '
+                    'plain style + native row separators + regular '
+                    'highlight {}, '
                     'multi-select {}, native cell (icon/name/tooltip) {}, '
                     'inside the frame (also after resize) {}: {}'.format(
                         table.numberOfRows(), self.files_view.count(),

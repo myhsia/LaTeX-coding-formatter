@@ -62,8 +62,7 @@ class NativeFileList:
                 table.addTableColumn_(column)
                 table.setHeaderView_(None)
                 table.setStyle_(AppKit.NSTableViewStylePlain)
-                table.setGridStyleMask_(
-                    AppKit.NSTableViewSolidHorizontalGridLineMask)
+                table.setGridStyleMask_(AppKit.NSTableViewGridNone)
                 table.setSelectionHighlightStyle_(
                     AppKit.NSTableViewSelectionHighlightStyleRegular)
                 table.setAllowsMultipleSelection_(True)
@@ -236,6 +235,11 @@ class NativeFileList:
         label.setFrame_(((24.0, 2.0), (max(40.0, width), 18.0)))
         return view
 
+    def _row_view(self, table):
+        import AppKit
+
+        return _row_view_class(AppKit).alloc().init()
+
     def cell_image(self, path):
         """Native icon for a row, cached per kind (folder / suffix)."""
         import AppKit
@@ -286,6 +290,9 @@ def _make_table_source():
         def tableViewSelectionDidChange_(self, notification):
             self.owner._selection_changed()
 
+        def tableView_rowViewForRow_(self, table, row):
+            return self.owner._row_view(table)
+
         # --- Finder drag & drop (current API: public.file-url) ---
         def tableView_validateDrop_proposedRow_proposedDropOperation_(
                 self, table, info, row, operation):
@@ -320,6 +327,43 @@ def _pasteboard_paths(pasteboard):
         if path:
             paths.append(str(path))
     return paths
+
+
+_ROW_VIEW_CLASS = None
+_ROW_SEPARATOR_ERROR = None
+
+
+def row_separator_error():
+    """Last error from the row separator drawing (for tests)."""
+    return _ROW_SEPARATOR_ERROR
+
+
+def _row_view_class(AppKit):
+    """NSTableRowView subclass drawing the hairline separator under each
+    row, so the empty area below the rows stays clean (the table view's
+    solid horizontal grid mask also paints that area)."""
+    global _ROW_VIEW_CLASS
+    if _ROW_VIEW_CLASS is None:
+        class _RowView(AppKit.NSTableRowView):
+            def drawSeparatorInRect_(self, rect):
+                # never let an exception escape into AppKit's drawing:
+                # pyobjc turns that into a hard trap
+                global _ROW_SEPARATOR_ERROR
+                try:
+                    bounds = self.bounds()
+                    AppKit.NSColor.separatorColor().setStroke()
+                    path = AppKit.NSBezierPath.bezierPath()
+                    path.setLineWidth_(1.0)
+                    y = bounds.size.height - 0.5
+                    path.moveToPoint_((0.0, y))
+                    path.lineToPoint_((bounds.size.width, y))
+                    path.stroke()
+                except Exception as exc:
+                    _ROW_SEPARATOR_ERROR = '{}: {}'.format(
+                        type(exc).__name__, exc)
+
+        _ROW_VIEW_CLASS = _RowView
+    return _ROW_VIEW_CLASS
 
 
 def _table_source_class():
