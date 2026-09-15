@@ -161,7 +161,21 @@ jobs:
         shell: bash
         run: |
           mkdir -p /tmp/guiselftest && cd /tmp/guiselftest
-          "$GITHUB_WORKSPACE/dist/format-tex-gui-${{ matrix.suffix }}.exe" --self-test
+          rm -f format_tex_gui_selftest.txt
+          # bound the run: a wedged native control can hang the UI thread,
+          # and the report is checkpointed after every step
+          "$GITHUB_WORKSPACE/dist/format-tex-gui-${{ matrix.suffix }}.exe" --self-test &
+          pid=$!
+          for _ in $(seq 1 48); do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 5
+          done
+          if kill -0 "$pid" 2>/dev/null; then
+            echo "::error::self-test still running after 240s; report so far:"
+            kill "$pid" 2>/dev/null || true
+          fi
+          wait "$pid" 2>/dev/null || true
+          echo "----- self-test report -----"
           cat format_tex_gui_selftest.txt
           grep -q '^PASS' format_tex_gui_selftest.txt
           # Windows must actually host the native SysListView32, not the

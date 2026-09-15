@@ -2190,19 +2190,32 @@ class MainWindow(QMainWindow):
     def _self_test_qt(self):
         """Windows/Linux (Qt application): the essentials a Win32/native
         hosting change must not break - list model, selection-driven
-        preview, apply with mirrored backup, options and menus."""
+        preview, apply with mirrored backup, options and menus.
+
+        The report is rewritten after every line so a hang (a native
+        control can wedge the UI thread) still leaves the last completed
+        step on disk for CI to print."""
         import shutil
         import tempfile
 
         lines = []
         ok = True
+        report = Path('format_tex_gui_selftest.txt')
+
+        def note(line):
+            lines.append(line)
+            try:
+                report.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+            except Exception:
+                pass
+
         try:
-            lines.append('platform: {} (Qt application)'.format(sys.platform))
-            lines.append('file list: nat{}/active:{}'.format(
+            note('platform: {} (Qt application)'.format(sys.platform))
+            note('file list: nat{}/active:{}'.format(
                 getattr(self.files_view, 'native', False),
                 getattr(self.files_view, 'active', 'n/a')))
             visible = bool(self.isVisible())
-            lines.append('window visible: {}'.format(visible))
+            note('window visible: {}'.format(visible))
             ok = ok and visible
 
             tmp = Path(tempfile.mkdtemp(prefix='qt_selftest_'))
@@ -2210,47 +2223,51 @@ class MainWindow(QMainWindow):
             (root / 'sub').mkdir(parents=True)
             sample = root / 'sub' / 'sample.tex'
             sample.write_text('中文English中文\n', encoding='utf-8')
+            note('clearing list')
             self.files_view.clear()
+            note('adding one file to the list')
             added = self._add_paths([(str(sample), str(root))])
+            note('list add requested: {}'.format(added))
             QApplication.processEvents()
             model_ok = (added == 1 and self.files_view.count() == 1)
-            lines.append('list model accepts a file: {}'.format(model_ok))
+            note('list model accepts a file: {}'.format(model_ok))
             ok = ok and model_ok
 
+            note('selecting row 0')
             self.files_view.select_index(0)
             QApplication.processEvents()
             text = self._output_text()
             preview_ok = str(sample) in text and '+' in text
-            lines.append('selection -> tagged diff preview: {}'.format(
-                preview_ok))
+            note('selection -> tagged diff preview: {}'.format(preview_ok))
             ok = ok and preview_ok
 
+            note('applying (write)')
             self._run(write=True, confirm=False)
             QApplication.processEvents()
             backup = root / 'backup' / 'sub' / 'sample.tex.bak'
             applied_ok = ('中文 English 中文' in sample.read_text(
                 encoding='utf-8') and backup.is_file())
-            lines.append('apply writes + mirrors the backup folder: {}'.format(
+            note('apply writes + mirrors the backup folder: {}'.format(
                 applied_ok))
             ok = ok and applied_ok
 
             opts_ok = all(
                 wr.isChecked() == wr.qt.isChecked()
                 for _s, wr in self._option_widgets)
-            lines.append('option controls consistent: {}'.format(opts_ok))
+            note('option controls consistent: {}'.format(opts_ok))
             ok = ok and opts_ok
 
             menu_ok = bool(self.menuBar().actions())
-            lines.append('menu bar present: {}'.format(menu_ok))
+            note('menu bar present: {}'.format(menu_ok))
             ok = ok and menu_ok
             shutil.rmtree(tmp, ignore_errors=True)
         except Exception as exc:
-            lines.append('self-test exception: {}: {}'.format(
+            note('self-test exception: {}: {}'.format(
                 type(exc).__name__, exc))
             ok = False
         result = 'PASS' if ok else 'FAIL'
         try:
-            Path('format_tex_gui_selftest.txt').write_text(
+            report.write_text(
                 result + '\n' + '\n'.join(lines) + '\n', encoding='utf-8')
         except Exception:
             pass
