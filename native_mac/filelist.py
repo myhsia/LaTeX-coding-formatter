@@ -56,7 +56,8 @@ class NativeFileList:
             import platform_effects as pe
 
             if self._scroll is None:
-                table = AppKit.NSTableView.alloc().init()
+                table = _table_view_class().alloc().init()
+                table.owner = self
                 column = AppKit.NSTableColumn.alloc().initWithIdentifier_(
                     'file')
                 column.setResizingMask_(
@@ -289,18 +290,19 @@ def _make_table_source():
         def tableView_rowViewForRow_(self, table, row):
             return self.owner._row_view(table)
 
-        # --- Finder drag & drop (current API: public.file-url) ---
+        # --- Finder drag & drop (fallback for the data-source path) ---
         def tableView_validateDrop_proposedRow_proposedDropOperation_(
                 self, table, info, row, operation):
-            if pasteboard_paths(info.draggingPasteboard()):
-                info.setDropOperation_(AppKit.NSTableViewDropOn)
-                return AppKit.NSDragOperationCopy
-            return AppKit.NSDragOperationNone
+            if not _dragging_paths(info):
+                return AppKit.NSDragOperationNone
+            info.setDropOperation_(
+                AppKit.NSTableViewDropOn if row >= 0
+                else AppKit.NSTableViewDropAbove)
+            return AppKit.NSDragOperationCopy
 
         def tableView_acceptDrop_row_dropOperation_(
                 self, table, info, row, operation):
-            paths = pasteboard_paths(info.draggingPasteboard())
-            self.owner._dropped(paths)
+            self.owner._dropped(_dragging_paths(info))
             return AppKit.NSDragOperationCopy
 
     return _TableSourceImpl
@@ -341,6 +343,57 @@ def _row_view_class(AppKit):
 
         _ROW_VIEW_CLASS = _RowView
     return _ROW_VIEW_CLASS
+
+
+def _dragging_paths(info):
+    """Paths from a dragging pasteboard (tolerant of odd/empty ones)."""
+    try:
+        return pasteboard_paths(info.draggingPasteboard())
+    except Exception:
+        return []
+
+
+_TABLE_VIEW_CLASS = None
+
+
+def _table_view_class():
+    """``NSTableView`` subclass that handles file drops itself.
+
+    A view-based table negotiates drops through its *data source*
+    (``tableView:validateDrop:...``/``acceptDrop:...``); in a pyobjc class
+    that path is not always engaged. Overriding the drag methods directly
+    mirrors the empty-state drop view, which is confirmed to work."""
+    global _TABLE_VIEW_CLASS
+    if _TABLE_VIEW_CLASS is None:
+        import AppKit
+
+        class _DropTable(AppKit.NSTableView):
+            def draggingEntered_(self, info):
+                return (AppKit.NSDragOperationCopy
+                        if _dragging_paths(info)
+                        else AppKit.NSDragOperationNone)
+
+            def draggingUpdated_(self, info):
+                return (AppKit.NSDragOperationCopy
+                        if _dragging_paths(info)
+                        else AppKit.NSDragOperationNone)
+
+            def prepareForDragOperation_(self, info):
+                return bool(_dragging_paths(info))
+
+            def performDragOperation_(self, info):
+                paths = _dragging_paths(info)
+                owner = getattr(self, 'owner', None)
+                if paths and owner is not None:
+                    owner._dropped(paths)
+                    return True
+                return False
+
+            def draggingExited_(self, info):
+                pass
+
+        _TABLE_VIEW_CLASS = _DropTable
+    return _TABLE_VIEW_CLASS
 
 
 def _table_source_class():

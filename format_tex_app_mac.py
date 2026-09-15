@@ -733,21 +733,25 @@ def run_self_test(app):
                      'file: {}'.format(registered, empty_drop_ok))
         ok = ok and registered and empty_drop_ok
 
-        # ... and dropping onto the populated list (the table) adds it too
+        # ... and dropping onto the populated list adds it too - the table
+        # view now handles the drag directly (like the empty-state host)
+        table = app.list._table
+        table_selectors = all(
+            bool(table.respondsToSelector_(selector)) for selector in (
+                b'draggingEntered:', b'prepareForDragOperation:',
+                b'performDragOperation:'))
         dropped_table = tmp / 'dropped_table.tex'
         dropped_table.write_text('中文English中文\n', encoding='utf-8')
-        source = app.list._datasource
         info = _drop_info([dropped_table])
-        operation = source \
-            .tableView_validateDrop_proposedRow_proposedDropOperation_(
-                app.list._table, info, -1, 0)
+        entered = (table.draggingEntered_(info)
+                   == AppKit.NSDragOperationCopy)
         before = app.list.count()
-        source.tableView_acceptDrop_row_dropOperation_(
-            app.list._table, info, -1, operation)
-        table_drop_ok = (operation == AppKit.NSDragOperationCopy
+        dropped = (bool(table.prepareForDragOperation_(info))
+                   and bool(table.performDragOperation_(info)))
+        table_drop_ok = (table_selectors and entered and dropped
                          and app.list.count() == before + 1)
-        lines.append('populated-list drop adds the file: {}'.format(
-            table_drop_ok))
+        lines.append('populated-list drop (table drag methods) adds the '
+                     'file: {}'.format(table_drop_ok))
         ok = ok and table_drop_ok
     except Exception:
         lines.append('self-test exception: {}'.format(
