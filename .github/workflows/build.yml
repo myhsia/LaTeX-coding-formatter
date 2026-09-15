@@ -70,6 +70,7 @@ jobs:
           --hidden-import native_mac.menus
           --hidden-import native_mac.diffview
           --hidden-import native_mac.controls
+          --hidden-import format_tex_controller
           $PYINSTALLER_EXCLUDES format_tex_gui.py
       - name: Build CLI (onefile)
         shell: bash

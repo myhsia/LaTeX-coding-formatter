@@ -43,10 +43,12 @@ class QtDiffViewAdapter:
     def append(self, text, fmt=None):
         from PySide6.QtGui import QTextCursor
 
+        tag = _tag_of(fmt, self.formats)
+        if tag is not None:
+            fmt = self.formats.get(tag)
         cursor = self.output.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
-        tag = _tag_of(fmt, self.formats)
-        if tag is None:
+        if fmt is None or isinstance(fmt, str):
             cursor.insertText(text)
         else:
             cursor.insertText(text, fmt)

@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
 from format_tex import (FormatOptions, backup_path, format_file,
                         make_backup, scan_directory)
 from diff_view import create_diff_view
+from format_tex_controller import FormatController
 from filelist_view import create_file_list_view
 from native_mac import menus
 from native_menu import (CUSTOM_SENTINEL, build_menu, menu_entries,
@@ -847,6 +848,7 @@ class MainWindow(QMainWindow):
         # window events.
         self.files_view = create_file_list_view(self)
         self.diff_view = create_diff_view(self)
+        self.controller = FormatController(self)
         # menus last: creating the menu bar triggers window events
         self._build_menus()
 
@@ -2363,11 +2365,16 @@ class MainWindow(QMainWindow):
         except Exception:
             self.show_error(traceback.format_exc())
 
-    def _selected_entries(self):
-        """(path, root) for the selected rows, in list order."""
+    def selected_entries(self):
+        """(path, root) for the selected rows, in list order (the view
+        interface the controller uses)."""
         return self.files_view.selected_entries()
 
-    def _format_options(self):
+    def _selected_entries(self):
+        return self.selected_entries()
+
+    # ---------- view interface used by the controller ----------
+    def options(self):
         return FormatOptions(
             punct=self.chk_punct.isChecked(),
             commands=self.chk_commands.isChecked(),
@@ -2377,113 +2384,20 @@ class MainWindow(QMainWindow):
             write_encoding=self.write_encoding(),
         )
 
+    def check_only(self):
+        return self.chk_check.isChecked()
+
+    def confirm(self, count):
+        return QMessageBox.question(
+            self, '确认', '将修改 {} 个文件, 是否继续?'.format(count)) \
+            == QMessageBox.StandardButton.Yes
+
+    # ---------- actions (delegating to the controller) ----------
     def _run(self, write, confirm=True):
-        entries = self._selected_entries()
-        if not entries:
-            self.set_status('请先选择文件')
-            return
-        opts = self._format_options()
-        self._render(self._collect(entries, opts), write, opts, confirm)
+        self.controller.run(write, confirm)
 
     def _preview_selection(self):
-        """Show the diff of the current selection (never writes). Called
-        whenever the file list selection changes."""
-        entries = self._selected_entries()
-        if not entries:
-            self.clear_output()
-            self.set_status('点击文件列表条目即可预览差异')
-            return
-        opts = self._format_options()
-        self._render(self._collect(entries, opts), False, opts)
-
-    def _collect(self, entries, opts):
-        results = []
-        for path, root in entries:
-            entry = {'path': path, 'root': root, 'count': 0,
-                     'changed': False, 'error': None, 'diff': [],
-                     'result': None, 'read_enc': None}
-            if not path.is_file():
-                entry['error'] = '文件不存在'
-            else:
-                try:
-                    source, result, count, read_enc = format_file(path, opts)
-                    entry['read_enc'] = read_enc
-                    entry['result'] = result
-                    entry['count'] = count
-                    entry['diff'] = list(difflib.unified_diff(
-                        source.splitlines(), result.splitlines(),
-                        fromfile=str(path) + ' (原文件)',
-                        tofile=str(path) + ' (格式化后)', lineterm=''))
-                    entry['changed'] = bool(entry['diff'])
-                except Exception as exc:
-                    entry['error'] = '{}: {}'.format(type(exc).__name__, exc)
-            results.append(entry)
-        return results
-
-    def _render(self, results, write, opts, confirm=True):
-        will_write = write and not self.chk_check.isChecked()
-        n_change = sum(1 for e in results if e['changed'])
-        if will_write and n_change and confirm and QMessageBox.question(
-                self, '确认', '将修改 {} 个文件, 是否继续?'.format(
-                    n_change)) != QMessageBox.StandardButton.Yes:
-            will_write = False
-
-        self.clear_output()
-        write_errors = 0
-        for e in results:
-            header = '== {} =='.format(e['path'])
-            if e.get('read_enc'):
-                header += '  [检测编码: {}]'.format(e['read_enc'])
-            self.append(header + '\n')
-            if e['error']:
-                self.append('错误: {}\n\n'.format(e['error']))
-                continue
-            if not e['changed']:
-                self.append('已符合格式, 无需修改\n\n')
-                continue
-            for line in e['diff']:
-                tag = None
-                if line.startswith(('+++', '---', '@@')):
-                    tag = 'meta'
-                elif line.startswith('+'):
-                    tag = 'add'
-                elif line.startswith('-'):
-                    tag = 'del'
-                fmt = getattr(self, 'fmt_' + tag) if tag else None
-                self.append(line + '\n', fmt)
-            self.append('\n')
-            if will_write:
-                out_enc = opts.effective_write_encoding(e.get('read_enc'))
-                try:
-                    data = e['result'].encode(out_enc)
-                except (ValueError, LookupError) as exc:
-                    self.append('错误: 无法以 {} 编码输出: {}\n\n'.format(
-                        out_enc, exc))
-                    write_errors += 1
-                    continue
-                try:
-                    if opts.backup:
-                        backup = make_backup(e['path'], e.get('root'))
-                        self.append('>>> 备份: {}\n'.format(backup))
-                    with open(e['path'], 'wb') as fh:
-                        fh.write(data)
-                except OSError as exc:
-                    # never modify a file we could not back up
-                    self.append('错误: 无法写入 (备份失败?): {}\n\n'.format(
-                        exc))
-                    write_errors += 1
-                    continue
-                self.append('>>> 已写入 ({}, {} 处插入)\n\n'.format(
-                    out_enc, e['count']))
-            else:
-                self.append('>>> 需 {} 处修改 [未写入]\n\n'.format(e['count']))
-
-        errors = sum(1 for e in results if e['error']) + write_errors
-        unchanged = sum(1 for e in results
-                        if not e['error'] and not e['changed'])
-        suffix = '  [仅检查模式]' if self.chk_check.isChecked() else ''
-        self.set_status('需修改: {}  已符合: {}  错误: {}{}'.format(
-            n_change, unchanged, errors, suffix))
+        self.controller.preview_selection()
 
 
 def main():
