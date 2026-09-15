@@ -122,13 +122,14 @@ macOS 上这些区域已是 AppKit 原生视图 (叠加在提供几何位置的 
   透明背景, 增/删/元信息按调色板上色; ⌘C/⌘A 由原生 Edit 菜单的响应链送达);
 * **± 按钮**: `NSSegmentedControl` (Small Square + `NSAddTemplate`/
   `NSRemoveTemplate` + momentary, 行高=控件原生高度);
-* **侧栏开关**: `NSSwitch`; **窗口标题**: 自绘 `NSTextField`;
+* **侧栏开关**: `NSSwitch`; **选项复选框**: 原生 `NSButton` (`NSSwitchButton`,
+  6 个, 覆盖在仅占位的 Qt spacer 上, 响应式 2×3/3×2 网格仍由 Qt 布局驱动);
+  **窗口标题**: 自绘 `NSTextField`;
 * **标题栏/侧栏材质**: `NSVisualEffectView` (色带 + 侧栏 + 页脚材料条);
 * **菜单**: 原生 `NSMenu` (见下).
 
-其余控件 (选项复选框、下拉、应用按钮、状态栏) 仍为 Qt (Windows/Linux 亦同),
-后续阶段将替换为 `NSPopUpButton`/`NSButton`/`NSTextField`, 最终在 macOS 上
-完全移除 Qt.
+其余控件 (两个下拉、应用按钮、状态栏) 仍为 Qt, 下一阶段将替换为
+`NSPopUpButton`/`NSButton`/`NSTextField`, 最终在 macOS 上完全移除 Qt.
 
 ### macOS 菜单与快捷键
 

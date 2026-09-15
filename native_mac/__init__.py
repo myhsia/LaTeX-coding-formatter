@@ -9,7 +9,11 @@ exposes small accessors for the application and the self-test.
 """
 
 from . import menus
+from .controls import (NativeCheckbox, NativeLabel,
+                        NativePopUpButton, NativePushButton)
 from .diffview import NativeDiffView
 from .filelist import NativeFileList
 
-__all__ = ['NativeDiffView', 'NativeFileList', 'menus']
+__all__ = ['NativeCheckbox', 'NativeDiffView', 'NativeFileList',
+           'NativeLabel', 'NativePopUpButton', 'NativePushButton',
+           'menus']

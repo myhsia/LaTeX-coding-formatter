@@ -101,6 +101,70 @@ SEPARATOR = QColor(120, 120, 128, 60)         # hairline between rows
 SELECTION_TINT = QColor(120, 120, 128, 30)    # hover tint
 
 
+class SpacerWidget(QWidget):
+    """Invisible layout slot: reserves the space a native control takes."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setStyleSheet('background: transparent;')
+
+
+class OptionControl:
+    """One option checkbox: a Qt checkbox (data/fallback) plus, on macOS, a
+    native ``NSButton`` checkbox drawn over a transparent spacer slot.
+
+    Exposes the small API the rest of the GUI uses (``isChecked``,
+    ``setChecked``, ``isVisible``, ``slot``)."""
+
+    def __init__(self, qt, slot, title, checked, window):
+        self.qt = qt
+        self.slot = slot
+        self.title = title
+        self.checked = bool(checked)
+        self.window = window
+        self.native = None
+
+    def build_native(self):
+        if sys.platform != 'darwin':
+            return False
+        from native_mac import NativeCheckbox
+
+        self.native = NativeCheckbox(
+            self.window, self.slot, self.title, self.checked,
+            on_toggle=self._toggled)
+        built = bool(self.native.build())
+        if built:
+            width, height = self.native.size()
+            self.slot.setFixedSize(max(int(width) + 2, 120),
+                                   max(int(height) + 2, 22))
+            self.qt.setChecked(self.checked)
+        return built
+
+    def _toggled(self, checked):
+        self.checked = bool(checked)
+        self.qt.setChecked(self.checked)
+
+    def place(self):
+        if self.native is not None and self.native.active:
+            self.native.place()
+
+    def isChecked(self):
+        if self.native is not None and self.native.active:
+            return self.native.isChecked()
+        return self.qt.isChecked()
+
+    def setChecked(self, value):
+        self.checked = bool(value)
+        self.qt.setChecked(self.checked)
+        if self.native is not None and self.native.active:
+            self.native.setChecked(self.checked)
+
+    def isVisible(self):
+        return bool(self.native is not None and self.native.isVisible()) \
+            or self.slot.isVisible()
+
+
 class FileRowDelegate(QStyledItemDelegate):
     """Finder / System Settings style rows in the file list: the native
     file icon, the file name (full path lives in the tooltip), a hairline
@@ -539,20 +603,25 @@ class MainWindow(QMainWindow):
         # option checkboxes reflow between 2 rows x 3 columns and
         # 3 rows x 2 columns depending on the panel width (see
         # _reflow_options); columns share the width equally
-        self.chk_punct = QCheckBox('半角标点后加空格')
-        self.chk_punct.setChecked(True)
-        self.chk_commands = QCheckBox('CJK 与控制序列空格')
-        self.chk_commands.setChecked(True)
-        self.chk_tight = QCheckBox('页码范围保持紧凑')
-        self.chk_tight.setChecked(True)
-        self.chk_backup = QCheckBox('生成备份文件 (backup/*.bak)')
-        self.chk_backup.setChecked(True)
-        self.chk_magic = QCheckBox('添加编码魔法注释')
-        self.chk_magic.setChecked(True)
-        self.chk_check = QCheckBox('仅检查 (不写入文件)')
-        self.option_checks = [self.chk_punct, self.chk_commands,
-                              self.chk_tight, self.chk_backup,
-                              self.chk_magic, self.chk_check]
+        option_specs = (('chk_punct', '半角标点后加空格', True),
+                        ('chk_commands', 'CJK 与控制序列空格', True),
+                        ('chk_tight', '页码范围保持紧凑', True),
+                        ('chk_backup', '生成备份文件 (backup/*.bak)', True),
+                        ('chk_magic', '添加编码魔法注释', True),
+                        ('chk_check', '仅检查 (不写入文件)', False))
+        self.option_checks = []
+        self._option_widgets = []
+        for attr, title, checked in option_specs:
+            qt = QCheckBox(title)
+            qt.setChecked(checked)
+            # the layout slot: on macOS the native checkbox is drawn over
+            # this spacer (a plain widget, so no Qt text shows through)
+            slot = SpacerWidget()
+            slot.setFixedSize(max(120, qt.sizeHint().width()), 22)
+            wrapper = OptionControl(qt, slot, title, checked, self)
+            setattr(self, attr, wrapper)
+            self.option_checks.append(slot)
+            self._option_widgets.append((slot, wrapper))
         self.options_grid = QGridLayout()
         self.options_grid.setContentsMargins(0, 0, 0, 0)
         self._option_columns = 0
@@ -641,7 +710,10 @@ class MainWindow(QMainWindow):
         if not self.option_checks:
             return
         spacing = self.options_grid.spacing()
-        widest = max(chk.sizeHint().width() for chk in self.option_checks)
+        # fixed-size spacer slots report -1 from sizeHint, so take the
+        # larger of the hint and the real width
+        widest = max(max(chk.width(), chk.sizeHint().width())
+                     for chk in self.option_checks)
         available = self.content_panel.width() - 24      # panel margins
         if available <= 0:
             available = self.width() - self.sidebar.width() - 24
@@ -837,6 +909,8 @@ class MainWindow(QMainWindow):
                 self._build_qt_menus()
         self._setup_native_switch()
         self._setup_native_plus_minus()
+        for _slot, wrapper in self._option_widgets:
+            wrapper.build_native()
         self.files_view.build()
         self.diff_view.build()
         if debug_enabled():
@@ -863,6 +937,8 @@ class MainWindow(QMainWindow):
             self.files_view.place()
         if hasattr(self, 'diff_view'):
             self.diff_view.place()
+        for _slot, wrapper in getattr(self, '_option_widgets', ()):
+            wrapper.place()
         if sys.platform == 'darwin' and menus.installed() \
                 and not menus.is_current():
             menus.install(self)
@@ -1642,6 +1718,36 @@ class MainWindow(QMainWindow):
                              '(also after resize) {}: {}'.format(
                                  pane_ok, fits_ok, pane_ok and fits_ok))
                 ok = ok and pane_ok and fits_ok
+
+            # native option checkboxes (macOS): real NSButton checkboxes
+            # drawn over transparent spacer slots
+            wrappers = [wr for _slot, wr in self._option_widgets]
+            natives = [wr.native for wr in wrappers]
+            if all(n is not None and n.active for n in natives):
+                states_ok = all(
+                    wr.isChecked() == wr.qt.isChecked() for wr in wrappers)
+                toggle_ok = False
+                probe = self.chk_check
+                before = probe.isChecked()
+                probe.setChecked(not before)
+                QApplication.processEvents()
+                toggle_ok = (probe.isChecked() != before
+                             and probe.qt.isChecked() == probe.isChecked()
+                             and probe.native.isChecked()
+                             == probe.isChecked())
+                probe.setChecked(before)
+                slots_ok = all(slot.isVisible() for slot in self.option_checks)
+                check_ok = states_ok and toggle_ok and slots_ok
+                lines.append('native option checkboxes: {} NSButton over '
+                             'spacer slots, states mirror the model {}, '
+                             'toggle round-trip {}: {}'.format(
+                                 len(natives), states_ok, toggle_ok,
+                                 check_ok))
+                ok = ok and check_ok
+            else:
+                lines.append('option checkboxes: Qt (native unavailable)')
+                ok = ok and all(wr.native is None or not wr.native.active
+                                for wr in wrappers)
 
             # option checkboxes: no heading, reflow 2x3 <-> 3x2 by
             # width, equally wide columns spread across the panel
