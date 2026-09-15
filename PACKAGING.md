@@ -152,8 +152,21 @@ shell 文件图标 (`SHGetFileInfoW` + `ImageList`)、资源管理器拖放
 回退), 但 CI 的 Windows 自检会**强制要求** `file list: natTrue/active:True`
 (即原生列表确实生效), 而不是仅要求 `PASS`.
 
-Linux 仍使用 Qt 列表; 由于 Linux 没有可嵌入的原生控件工具包, 该平台不计划
-原生视图.
+Windows 的其余控件同样是真正的 Win32 控件 (`win32_controls.py`, 覆盖在 Qt
+槽位之上): 6 个选项复选框 = `BUTTON` + `BS_AUTOCHECKBOX`, 两个下拉 =
+`COMBOBOX` + `CBS_DROPDOWNLIST` (下拉高度用 `CB_SETMINVISIBLE` 与控件高度
+解耦), "应用格式化" = `BUTTON` + `BS_PUSHBUTTON`, 状态栏 = `STATIC`
+(`WM_CTLCOLORSTATIC`/`WM_CTLCOLORBTN` 返回 `NULL_BRUSH` + 透明背景, 以贴合
+Qt 面板); 字体取系统消息字体 (`SPI_GETNONCLIENTMETRICS`). 通知经槽位窗口的
+WndProc 子类以 `WM_COMMAND` 送达. 所有 Win32 调用同样显式声明
+`argtypes`/`restype`, 并按 `devicePixelRatio` 换算坐标.
+
+自检报告 `native controls: options 6/6 ext … enc … apply … status …` 以及
+各镜像回合 (复选框状态、按钮启用、标签文本、编码下拉), CI 在 Windows 上
+强制要求 `options 6/6`.
+
+Linux 仍使用 Qt 列表与 Qt 控件; 由于 Linux 没有可嵌入的原生控件工具包,
+该平台不计划原生视图.
 
 ### macOS 菜单与快捷键
 
