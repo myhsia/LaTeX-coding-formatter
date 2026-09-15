@@ -51,11 +51,12 @@ def _make_target(owner):
     return target
 
 
-def _place_centred(window, view, slot, align_left=True):
-    """Fit ``view`` to ``slot``: native size, left aligned (or filling)."""
+def _place_centred(window, view, target, align_left=True):
+    """Fit ``view`` into ``target``: native size, left aligned (or filling)
+    and vertically centred - works for a Qt slot or a native view."""
     import platform_effects as pe
 
-    _qt_view, _theme, rect = pe.slot_rect_in_theme(window, slot, inset=1.0)
+    rect = target.rect()
     native = view.frame().size
     height = min(native.height, rect.size.height)
     y = rect.origin.y + (rect.size.height - height) / 2.0
@@ -66,7 +67,7 @@ def _place_centred(window, view, slot, align_left=True):
         x = rect.origin.x
         width = rect.size.width
     view.setFrame_(((x, y), (width, height)))
-    view.setHidden_(slot.isVisible() is False)
+    view.setHidden_(not target.visible())
 
 
 class NativeCheckbox:
@@ -102,14 +103,9 @@ class NativeCheckbox:
                 button.setAction_(b'toggled:')
                 button.sizeToFit()
                 self.view = button
-            _qt_view, theme, _rect = pe.slot_rect_in_theme(self.window,
-                                                           self.slot)
-            try:
-                self.view.removeFromSuperview()
-            except Exception:
-                pass
-            theme.addSubview_positioned_relativeTo_(
-                self.view, AppKit.NSWindowAbove, _qt_view)
+            self._target = pe.as_target(self.window, self.slot, inset=1.0)
+            if not pe.place_in(self.window, self._target, self.view):
+                return False
             self.active = True
             self.place()
             return True
@@ -148,7 +144,7 @@ class NativeCheckbox:
 
     def place(self):
         if self.active and self.view is not None:
-            _place_centred(self.window, self.view, self.slot)
+            _place_centred(self.window, self.view, self._target)
 
     def size(self):
         if self.view is None:
@@ -194,14 +190,9 @@ class NativePopUpButton:
                     popup.selectItemWithTitle_(self._current)
                 popup.sizeToFit()
                 self.view = popup
-            _qt_view, theme, _rect = pe.slot_rect_in_theme(self.window,
-                                                           self.slot)
-            try:
-                self.view.removeFromSuperview()
-            except Exception:
-                pass
-            theme.addSubview_positioned_relativeTo_(
-                self.view, AppKit.NSWindowAbove, _qt_view)
+            self._target = pe.as_target(self.window, self.slot, inset=1.0)
+            if not pe.place_in(self.window, self._target, self.view):
+                return False
             self.active = True
             self.place()
             return True
@@ -245,7 +236,7 @@ class NativePopUpButton:
 
     def place(self):
         if self.active and self.view is not None:
-            _place_centred(self.window, self.view, self.slot)
+            _place_centred(self.window, self.view, self._target)
 
     def size(self):
         if self.view is None:
@@ -282,14 +273,9 @@ class NativePushButton:
                 button.setAction_(b'clicked:')
                 button.sizeToFit()
                 self.view = button
-            _qt_view, theme, _rect = pe.slot_rect_in_theme(self.window,
-                                                           self.slot)
-            try:
-                self.view.removeFromSuperview()
-            except Exception:
-                pass
-            theme.addSubview_positioned_relativeTo_(
-                self.view, AppKit.NSWindowAbove, _qt_view)
+            self._target = pe.as_target(self.window, self.slot, inset=1.0)
+            if not pe.place_in(self.window, self._target, self.view):
+                return False
             self.active = True
             self.place()
             return True
@@ -320,7 +306,7 @@ class NativePushButton:
 
     def place(self):
         if self.active and self.view is not None:
-            _place_centred(self.window, self.view, self.slot)
+            _place_centred(self.window, self.view, self._target)
 
     def size(self):
         if self.view is None:
@@ -358,14 +344,9 @@ class NativeLabel:
                 field.setFont_(AppKit.NSFont.systemFontOfSize_(13.0))
                 field.sizeToFit()
                 self.view = field
-            _qt_view, theme, _rect = pe.slot_rect_in_theme(self.window,
-                                                           self.slot)
-            try:
-                self.view.removeFromSuperview()
-            except Exception:
-                pass
-            theme.addSubview_positioned_relativeTo_(
-                self.view, AppKit.NSWindowAbove, _qt_view)
+            self._target = pe.as_target(self.window, self.slot, inset=1.0)
+            if not pe.place_in(self.window, self._target, self.view):
+                return False
             self.active = True
             self.place()
             return True
@@ -394,7 +375,7 @@ class NativeLabel:
 
     def place(self):
         if self.active and self.view is not None:
-            _place_centred(self.window, self.view, self.slot)
+            _place_centred(self.window, self.view, self._target)
 
     def size(self):
         if self.view is None:

@@ -94,14 +94,9 @@ class NativeDiffView:
                     if colour is not None
                 }
 
-            _qt_view, theme, _rect = pe.slot_rect_in_theme(self.window,
-                                                           self.slot)
-            try:
-                self._scroll.removeFromSuperview()
-            except Exception:
-                pass
-            theme.addSubview_positioned_relativeTo_(
-                self._scroll, AppKit.NSWindowAbove, _qt_view)
+            self._target = pe.as_target(self.window, self.slot, inset=1.0)
+            if not pe.place_in(self.window, self._target, self._scroll):
+                return False
             self.place()
             return True
         except Exception as exc:
@@ -117,11 +112,9 @@ class NativeDiffView:
         if self._scroll is None:
             return
         try:
-            import platform_effects as pe
-
-            _qt_view, _theme, rect = pe.slot_rect_in_theme(
-                self.window, self.slot, inset=1.0)
+            rect = self._target.rect()
             self._scroll.setFrame_((rect.origin, rect.size))
+            self._scroll.setHidden_(not self._target.visible())
         except Exception:
             pass
 

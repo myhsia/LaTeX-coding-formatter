@@ -88,14 +88,9 @@ class NativeFileList:
                 self._table, self._scroll, self._datasource = (
                     table, scroll, source)
 
-            _qt_view, theme, _rect = pe.slot_rect_in_theme(self.window,
-                                                           self.slot)
-            try:
-                self._scroll.removeFromSuperview()
-            except Exception:
-                pass
-            theme.addSubview_positioned_relativeTo_(
-                self._scroll, AppKit.NSWindowAbove, _qt_view)
+            self._target = pe.as_target(self.window, self.slot, inset=1.0)
+            if not pe.place_in(self.window, self._target, self._scroll):
+                return False
             self.place()
             return True
         except Exception as exc:
@@ -112,10 +107,7 @@ class NativeFileList:
         if self._scroll is None:
             return
         try:
-            import platform_effects as pe
-
-            _qt_view, _theme, rect = pe.slot_rect_in_theme(
-                self.window, self.slot, inset=1.0)
+            rect = self._target.rect()
             self._scroll.setFrame_((rect.origin, rect.size))
             self._refresh_visibility()
         except Exception:
@@ -189,7 +181,9 @@ class NativeFileList:
 
     def _refresh_visibility(self):
         if self._scroll is not None:
-            self._scroll.setHidden_(not self.items)
+            visible = bool(getattr(self, '_target', None) is None
+                           or self._target.visible())
+            self._scroll.setHidden_(not (self.items and visible))
 
     def cell_view(self, row):
         """The view for a row (also used by the self-test)."""

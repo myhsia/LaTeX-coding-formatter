@@ -2074,11 +2074,17 @@ class MainWindow(QMainWindow):
                         nswin.makeKeyAndOrderFront_(None)
                     except Exception:
                         pass
-                    focused = bool(nswin.makeFirstResponder_(table))
-                    # pyobjc may wrap the same Objective-C object in a
-                    # fresh proxy, so compare by "someone accepts it"
-                    chain_ok = (AppKit.NSApp().targetForAction_to_from_(
-                        b'selectAll:', table, None) is not None)
+                    focused = False
+                    for _ in range(4):      # the key state may lag
+                        QApplication.processEvents()
+                        focused = bool(nswin.makeFirstResponder_(table))
+                        if focused:
+                            break
+                    # sending straight to the table proves the menu's
+                    # selector is the one the table implements (and does
+                    # not depend on the window being key)
+                    chain_ok = bool(AppKit.NSApp().sendAction_to_from_(
+                        b'selectAll:', table, None))
                     if focused:
                         self.files_view.select_rows([])
                         QApplication.processEvents()

@@ -170,6 +170,102 @@ def slot_rect_in_theme(window, slot, inset=0.0, height=None):
     return qt_view, theme, qt_view.convertRect_toView_(rect, theme)
 
 
+class SlotTarget:
+    """A Qt widget as a placement target: the rect (in the theme frame) and
+    visibility the native views need, so the same view code serves the Qt
+    app (a slot widget) and the native app (an AppKit view)."""
+
+    def __init__(self, window, widget, inset=0.0, height=None):
+        self.window = window
+        self.widget = widget
+        self.inset = float(inset)
+        self.height = height
+
+    def rect(self):
+        import objc
+        from PySide6.QtCore import QPoint
+
+        qt_view = objc.objc_object(c_void_p=int(self.window.winId()))
+        theme = qt_view.superview()
+        top_left = self.widget.mapTo(
+            self.window,
+            QPoint(int(self.inset), int(self.inset)))
+        height = (self.widget.height() if self.height is None
+                  else self.height)
+        rect = ((float(top_left.x()), float(top_left.y())),
+                (float(self.widget.width() - 2 * self.inset),
+                 float(height - 2 * self.inset)))
+        return qt_view.convertRect_toView_(rect, theme)
+
+    def visible(self):
+        try:
+            return bool(self.widget.isVisible())
+        except Exception:
+            return True
+
+
+class ViewTarget:
+    """An AppKit view as a placement target (used by the native app)."""
+
+    def __init__(self, view, inset=0.0):
+        self.view = view
+        self.inset = float(inset)
+
+    def rect(self):
+        frame = self.view.frame()
+        inset = self.inset
+        return ((frame.origin.x + inset, frame.origin.y + inset),
+                (max(0.0, frame.size.width - 2 * inset),
+                 max(0.0, frame.size.height - 2 * inset)))
+
+    def visible(self):
+        try:
+            return not bool(self.view.isHidden())
+        except Exception:
+            return True
+
+
+def target_anchor(window, target):
+    """(theme_frame, anchor_view) for a placement target: the Qt view for
+    a Qt slot, or the target's own view in the native app."""
+    widget = getattr(target, 'widget', None)
+    if widget is not None:
+        anchor, theme, _rect = slot_rect_in_theme(window, widget)
+        return theme, anchor
+    anchor = getattr(target, 'view', None)
+    return (anchor.superview() if anchor is not None else None), anchor
+
+
+def place_in(window, target, view, above=True, hidden=None):
+    """Add ``view`` next to the target's anchor and fit it to the target's
+    rect - the single placement path for every native view."""
+    import AppKit
+
+    theme, anchor = target_anchor(window, target)
+    if theme is None or anchor is None:
+        return False
+    try:
+        view.removeFromSuperview()
+    except Exception:
+        pass
+    theme.addSubview_positioned_relativeTo_(
+        view, AppKit.NSWindowAbove if above else AppKit.NSWindowBelow, anchor)
+    rect = target.rect()
+    view.setFrame_((rect.origin, rect.size))
+    if hidden is None:
+        hidden = not target.visible()
+    view.setHidden_(bool(hidden))
+    return True
+
+
+def as_target(window, target, inset=0.0, height=None):
+    """Accept either a placement target or a Qt widget. (A QWidget also
+    has a ``rect()`` method, so this tests our own classes.)"""
+    if isinstance(target, (SlotTarget, ViewTarget)):
+        return target
+    return SlotTarget(window, target, inset=inset, height=height)
+
+
 def native_window_color(dark=False):
     """The platform's native window background as '#rrggbb', so Qt can
     paint its content surface with the real system colour instead of its
