@@ -11,7 +11,12 @@ the dialogs. Windows/Linux keep the Qt application (`format_tex_gui.py`).
 
 import sys
 import traceback
+import warnings
 from pathlib import Path
+
+# setting a layer colour passes a CGColorRef, which pyobjc cannot type:
+# harmless, but it would spam the logs
+warnings.filterwarnings('ignore', message='.*PyObjCPointer.*')
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -51,11 +56,16 @@ class MacApp:
         self.strip = None
         self.footer_tint = None
         self._confirm_ok = False
+        self.dark = True
+        self.colours = {}
 
     # ---------- construction ----------
     def build(self):
         import AppKit
 
+        from format_tex_theme import native_dark, palette
+        self.dark = native_dark()
+        self.colours = palette(self.dark)
         if not self.shell.build():
             import platform_effects as pe
             print('shell build failed: {}'.format(pe.notes()[-3:]),
@@ -225,8 +235,9 @@ class MacApp:
         host.addSubview_(diff_slot)
         self.diff = NativeDiffView(
             None, ViewTarget(diff_slot),
-            colours={'add': '#4ec9b0', 'del': '#f48771',
-                     'meta': '#569cd6'})
+            colours={'add': self.colours.get('add'),
+                     'del': self.colours.get('del'),
+                     'meta': self.colours.get('meta')})
         self.diff.build()
         self.diff_host = diff_slot
 

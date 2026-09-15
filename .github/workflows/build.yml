@@ -48,7 +48,11 @@ jobs:
         if: ${{ !(runner.os == 'Windows' && runner.arch == 'ARM64') }}
         with:
           python-version: '3.12'
-      - run: python -m pip install pyinstaller chardet PySide6-Essentials
+      # macOS ships the native AppKit app (no Qt); other platforms use Qt
+      - if: runner.os == 'macOS'
+        run: python -m pip install pyinstaller chardet
+      - if: runner.os != 'macOS'
+        run: python -m pip install pyinstaller chardet PySide6-Essentials
       - name: Record macOS toolchain (macOS 27.0 SDK required)
         if: runner.os == 'macOS'
         shell: bash
@@ -58,18 +62,31 @@ jobs:
           SDK="$(xcrun --show-sdk-version --sdk macosx)"
           echo "macOS SDK: $SDK"
           test "$SDK" = "27.0"
-      - name: Install macOS native-effect deps
+      - name: Install macOS native deps
         if: runner.os == 'macOS'
         run: python -m pip install pyobjc-framework-Cocoa
-      - name: Build GUI (onefile, windowed)
+      # macOS: the native AppKit app (no Qt at all)
+      - name: Build GUI (macOS, native, onefile windowed)
+        if: runner.os == 'macOS'
         shell: bash
         run: >
           python -m PyInstaller --onefile --windowed --name format-tex-gui
           --distpath dist --workpath pyibuild --specpath pyibuild
-          --hidden-import native_mac --hidden-import filelist_view
-          --hidden-import native_mac.menus
+          --hidden-import native_mac --hidden-import native_mac.menus
           --hidden-import native_mac.diffview
           --hidden-import native_mac.controls
+          --hidden-import native_mac.shell
+          --hidden-import native_mac.filelist
+          --hidden-import format_tex_controller
+          --hidden-import format_tex_theme
+          format_tex_app_mac.py
+      - name: Build GUI (onefile, windowed)
+        if: runner.os != 'macOS'
+        shell: bash
+        run: >
+          python -m PyInstaller --onefile --windowed --name format-tex-gui
+          --distpath dist --workpath pyibuild --specpath pyibuild
+          --hidden-import filelist_view --hidden-import diff_view
           --hidden-import format_tex_controller
           $PYINSTALLER_EXCLUDES format_tex_gui.py
       - name: Build CLI (onefile)
@@ -134,8 +151,8 @@ jobs:
         run: |
           mkdir -p /tmp/guiselftest && cd /tmp/guiselftest
           "$GITHUB_WORKSPACE/dist/format-tex-gui-macos-arm64" --self-test
-          cat format_tex_gui_selftest.txt
-          grep -q '^PASS' format_tex_gui_selftest.txt
+          cat format_tex_mac_selftest.txt
+          grep -q '^PASS' format_tex_mac_selftest.txt
       - name: Build DMG (macOS)
         if: runner.os == 'macOS'
         shell: bash

@@ -131,9 +131,12 @@ macOS 上这些区域已是 AppKit 原生视图 (叠加在提供几何位置的 
 * **标题栏/侧栏材质**: `NSVisualEffectView` (色带 + 侧栏 + 页脚材料条);
 * **菜单**: 原生 `NSMenu` (见下).
 
-至此 macOS 上可见控件均为原生 (Qt 部件仅作为布局占位与回退);
-下一阶段将用原生窗口外壳 (`NSWindow` + `NSSplitViewController`) 取代
-Qt 窗口, 并在 macOS 构建中移除 PySide6.
+**macOS 已完全脱离 Qt**: macOS 构建使用 `format_tex_app_mac.py` (纯 AppKit:
+`NSWindow` + `NSSplitView` 窗口外壳, 原生视图, AppKit 对话框与原生菜单),
+共用 `format_tex_controller.py` (无 GUI 依赖的逻辑) 与 `format_tex_theme.py`
+(调色板, 按系统外观选择). Windows/Linux 继续使用 Qt 版本 (`format_tex_gui.py`),
+行为由同一套控制器保证一致. macOS 产物因此不再包含 PySide6 (体积约 43 MB → 29 MB),
+其自检为 `--self-test` 写出的 `format_tex_mac_selftest.txt` (CI 校验 PASS).
 
 ### macOS 菜单与快捷键
 

@@ -41,6 +41,7 @@ from format_tex import (FormatOptions, backup_path, format_file,
                         make_backup, scan_directory)
 from diff_view import create_diff_view
 from format_tex_controller import FormatController
+from format_tex_theme import DARK, LIGHT
 from filelist_view import create_file_list_view
 from native_mac import menus
 from native_menu import (CUSTOM_SENTINEL, build_menu, menu_entries,
@@ -74,14 +75,6 @@ ENCODINGS = ['同输入', 'utf-8', 'gb18030', 'gbk', 'gb2312', 'big5',
              'utf-16', 'latin-1']
 EXTENSIONS = ['*.tex', '*.ctx', '*.sty', '*.cls', '*.dtx', '*.txt']
 
-LIGHT = {
-    'text_bg': '#fafafa', 'text_fg': '#1a1a1a',
-    'add': '#098658', 'del': '#a31515', 'meta': '#0550ae',
-}
-DARK = {
-    'text_bg': '#1e1e1e', 'text_fg': '#d4d4d4',
-    'add': '#4ec9b0', 'del': '#f48771', 'meta': '#569cd6',
-}
 
 
 def detect_dark(app):
