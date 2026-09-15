@@ -147,6 +147,7 @@ jobs:
             smoke-root/sub/t.tex
       - name: GUI self-test (macOS)
         if: runner.os == 'macOS'
+        timeout-minutes: 6
         shell: bash
         run: |
           mkdir -p /tmp/guiselftest && cd /tmp/guiselftest
@@ -155,6 +156,7 @@ jobs:
           grep -q '^PASS' format_tex_mac_selftest.txt
       - name: GUI self-test (Windows)
         if: runner.os == 'Windows'
+        timeout-minutes: 6
         shell: bash
         run: |
           mkdir -p /tmp/guiselftest && cd /tmp/guiselftest

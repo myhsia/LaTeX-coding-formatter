@@ -2260,6 +2260,10 @@ class MainWindow(QMainWindow):
         return Path.home() / 'format_tex_gui.log'
 
     def show_error(self, text):
+        if getattr(self, '_selftest', False):
+            # a modal dialog would block the self-test forever
+            print('error during self-test: {}'.format(text), file=sys.stderr)
+            return
         try:
             self.append('[内部错误]\n{}\n'.format(text))
             last = text.splitlines()[-1] if text else ''
@@ -2496,6 +2500,7 @@ def main():
     if sys.platform.startswith('linux') and detect_dark(app):
         app.setStyle('Fusion')
     window = MainWindow()
+    window._selftest = selftest
     sys.excepthook = lambda t, v, tb: window.show_error(
         ''.join(traceback.format_exception(t, v, tb)))
     window.set_status(
