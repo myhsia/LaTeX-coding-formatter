@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+r"""Native macOS window shell (no Qt).
+
+Builds the Finder-like window the app is known for, entirely in AppKit:
+
+    +-------------------------------------------+---------------+
+    | sidebar material (full height)            | toolbar strip |
+    |                                           | (52 pt)       |
+    |   [ extension | recursive switch ]        +---------------+
+    |   file list                               | content panel |
+    |   [ + | - ]  footer                       | (opaque)      |
+    +-------------------------------------------+---------------+
+
+The window uses ``fullSizeContentView`` with a transparent titlebar, so
+the sidebar material runs from the very top edge down (no seam) and only
+the strip right of the sidebar gets the toolbar material - the same look
+the Qt app produced, now without Qt. Callers host their own views inside
+``sidebar_host`` / ``content_host`` and can use ``ViewTarget`` with the
+``native_mac`` view modules.
+"""
+
+import sys
+
+BAND_HEIGHT = 52.0
+FOOTER_HEIGHT = 24.0
+SIDEBAR_WIDTH = 240.0
+SIDEBAR_MIN = 180.0
+WINDOW_MIN = (760.0, 560.0)
+
+
+class NativeShell:
+    """The window, its split view and the material composition."""
+
+    def __init__(self, title='LaTeX Coding Style Formatter'):
+        self.title = title
+        self.window = None
+        self.split = None
+        self.sidebar_material = None
+        self.panel = None
+        self.band = None
+        self.sidebar_host = None
+        self.content_host = None
+        self.toolbar_host = None
+        self.footer_separator = None
+        self.footer_host = None
+        self.sidebar_group = None
+        self._delegate = None
+        self.on_layout = None          # called after each relayout
+
+    @staticmethod
+    def available():
+        return sys.platform == 'darwin'
+
+    # ---------- construction ----------
+    def build(self, width=1000.0, height=700.0):
+        if not self.available():
+            return False
+        try:
+            import AppKit
+
+            style = (AppKit.NSWindowStyleMaskTitled
+                     | AppKit.NSWindowStyleMaskClosable
+                     | AppKit.NSWindowStyleMaskMiniaturizable
+                     | AppKit.NSWindowStyleMaskResizable
+                     | AppKit.NSWindowStyleMaskFullSizeContentView)
+            window = AppKit.NSWindow.alloc() \
+                .initWithContentRect_styleMask_backing_defer_(
+                    ((120.0, 120.0), (width, height)), style,
+                    AppKit.NSBackingStoreBuffered, False)
+            window.setTitle_(self.title)
+            window.setTitlebarAppearsTransparent_(True)
+            window.setTitleVisibility_(AppKit.NSWindowTitleVisible)
+            window.setMinSize_(WINDOW_MIN)
+            window.setBackgroundColor_(AppKit.NSColor.windowBackgroundColor())
+            try:
+                window.setTitlebarSeparatorStyle_(
+                    AppKit.NSTitlebarSeparatorStyleNone)
+            except Exception:
+                pass
+
+            content = window.contentView()
+
+            split = AppKit.NSSplitView.alloc().initWithFrame_(
+                content.bounds())
+            split.setVertical_(True)
+            split.setDividerStyle_(AppKit.NSSplitViewDividerStyleThin)
+            split.setAutoresizingMask_(
+                AppKit.NSViewWidthSizable | AppKit.NSViewHeightSizable)
+
+            sidebar = AppKit.NSView.alloc().initWithFrame_(
+                ((0.0, 0.0), (SIDEBAR_WIDTH, height)))
+            panel = AppKit.NSView.alloc().initWithFrame_(
+                ((SIDEBAR_WIDTH + 1, 0.0),
+                 (width - SIDEBAR_WIDTH - 1, height)))
+            panel.setWantsLayer_(True)
+            panel.layer().setBackgroundColor_(
+                AppKit.NSColor.windowBackgroundColor().CGColor())
+
+            # the sidebar's own blur runs the full height, from the very
+            # top edge (it continues behind the title bar)
+            sidebar_material = AppKit.NSVisualEffectView.alloc().init()
+            sidebar_material.setMaterial_(
+                AppKit.NSVisualEffectMaterialSidebar)
+            sidebar_material.setBlendingMode_(
+                AppKit.NSVisualEffectBlendingModeBehindWindow)
+            sidebar_material.setState_(
+                AppKit.NSVisualEffectStateFollowsWindowActiveState)
+            sidebar_material.setAutoresizingMask_(
+                AppKit.NSViewWidthSizable | AppKit.NSViewHeightSizable)
+            sidebar_material.setFrame_(sidebar.bounds())
+            sidebar.addSubview_(sidebar_material)
+
+            # the toolbar strip covers only the title bar right of the
+            # sidebar (over the opaque panel)
+            band = AppKit.NSVisualEffectView.alloc().init()
+            band.setMaterial_(AppKit.NSVisualEffectMaterialHeaderView)
+            band.setBlendingMode_(
+                AppKit.NSVisualEffectBlendingModeWithinWindow)
+            band.setState_(
+                AppKit.NSVisualEffectStateFollowsWindowActiveState)
+            panel.addSubview_(band)
+
+            footer = AppKit.NSView.alloc().initWithFrame_(
+                ((0.0, 0.0), (SIDEBAR_WIDTH, FOOTER_HEIGHT)))
+            footer.setAutoresizingMask_(AppKit.NSViewWidthSizable
+                                        | AppKit.NSViewMaxYMargin)
+            separator = AppKit.NSBox.alloc().init()
+            separator.setBoxType_(AppKit.NSBoxSeparator)
+            sidebar.addSubview_(footer)
+            sidebar.addSubview_(separator)
+
+            split.addSubview_(sidebar)
+            split.addSubview_(panel)
+            content.addSubview_(split)
+
+            sidebar_host = AppKit.NSView.alloc().init()
+            panel_host = AppKit.NSView.alloc().init()
+            sidebar.addSubview_(sidebar_host)
+            panel.addSubview_(panel_host)
+
+            self.window, self.split = window, split
+            self.sidebar_material, self.panel, self.band = (
+                sidebar_material, panel, band)
+            self.sidebar_host, self.content_host = sidebar_host, panel_host
+            self.footer_host, self.footer_separator = footer, separator
+            self.toolbar_host = band
+            self.layout()
+            return True
+        except Exception as exc:
+            self._note('native shell failed: {}: {}'.format(
+                type(exc).__name__, exc))
+            return False
+
+    # ---------- layout ----------
+    def sidebar_width(self):
+        try:
+            return float(self.sidebar_host.superview()
+                         .frame().size.width)
+        except Exception:
+            return SIDEBAR_WIDTH
+
+    def layout(self):
+        """Recompute every frame from the window size (frame-based layout,
+        so there is no auto-layout pass to fight with)."""
+        if self.window is None:
+            return
+        import AppKit
+
+        content = self.window.contentView()
+        bounds = content.bounds()
+        width, height = bounds.size.width, bounds.size.height
+        sidebar = self.sidebar_host.superview()
+        panel = self.panel
+        sidebar_width = max(SIDEBAR_MIN, sidebar.frame().size.width)
+        panel_width = max(1.0, width - sidebar_width - 1.0)
+
+        sidebar.setFrame_(((0.0, 0.0), (sidebar_width, height)))
+        panel.setFrame_(((sidebar_width + 1.0, 0.0),
+                         (panel_width, height)))
+        self.sidebar_material.setFrame_(sidebar.bounds())
+
+        # toolbar strip: only the title bar right of the sidebar
+        band_height = min(BAND_HEIGHT, height)
+        self.band.setFrame_(((0.0, height - band_height),
+                             (panel_width, band_height)))
+
+        # sidebar contents: group at the top (below the band), then the
+        # file list, then the footer row
+        top = height - BAND_HEIGHT - 12.0
+        group_height = 64.0
+        if self.sidebar_group is not None:
+            self.sidebar_group.setFrame_(((12.0, top - group_height),
+                                          (sidebar_width - 24.0,
+                                           group_height)))
+        self.sidebar_host.setFrame_(
+            ((0.0, FOOTER_HEIGHT),
+             (sidebar_width, max(1.0, top - group_height - 12.0
+                                 - FOOTER_HEIGHT))))
+        self.footer_host.setFrame_(((0.0, 0.0),
+                                    (sidebar_width, FOOTER_HEIGHT)))
+        self.footer_separator.setFrame_(((0.0, FOOTER_HEIGHT),
+                                         (sidebar_width, 1.0)))
+
+        # content: the strip occupies the top, the rest is the panel host
+        self.content_host.setFrame_(
+            ((12.0, 12.0), (max(1.0, panel_width - 24.0),
+                            max(1.0, height - BAND_HEIGHT - 24.0))))
+
+        self._align_title(sidebar_width)
+        if callable(self.on_layout):
+            self.on_layout()
+
+    def _align_title(self, sidebar_width):
+        """Left-align the window title just right of the sidebar."""
+        try:
+            title = self.window.toolbarTitlebarTitleTextField()
+            if title is None:
+                return
+            frame = self.window.frame()
+            left = frame.origin.x
+            rect = title.convertRect_toView_(title.bounds(), None)
+            screen = self.window.convertRectToScreen_(rect)
+            target = left + sidebar_width + 8.0
+            delta = target - screen.origin.x
+            if abs(delta) >= 0.5:
+                tf = title.frame()
+                title.setFrameOrigin_((tf.origin.x + delta, tf.origin.y))
+        except Exception:
+            pass
+
+    # ---------- helpers ----------
+    def make_group_box(self):
+        """The sidebar's grouped settings box (rounded translucent)."""
+        import AppKit
+
+        box = AppKit.NSView.alloc().init()
+        box.setWantsLayer_(True)
+        box.layer().setBackgroundColor_(
+            AppKit.NSColor.colorWithSRGBRed_green_blue_alpha_(
+                0.47, 0.47, 0.5, 0.12).CGColor())
+        box.layer().setCornerRadius_(8.0)
+        self.sidebar_group = box
+        self.sidebar_host.superview().addSubview_(box)
+        return box
+
+    def show(self):
+        if self.window is not None:
+            self.window.makeKeyAndOrderFront_(None)
+
+    def _note(self, message):
+        try:
+            import platform_effects as pe
+            pe._note(message)
+        except Exception:
+            pass
