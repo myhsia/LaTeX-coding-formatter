@@ -164,6 +164,9 @@ jobs:
           "$GITHUB_WORKSPACE/dist/format-tex-gui-${{ matrix.suffix }}.exe" --self-test
           cat format_tex_gui_selftest.txt
           grep -q '^PASS' format_tex_gui_selftest.txt
+          # Windows must actually host the native SysListView32, not the
+          # Qt fallback: fail loudly if the native list did not activate.
+          grep -q 'file list: natTrue/active:True' format_tex_gui_selftest.txt
       - name: Build DMG (macOS)
         if: runner.os == 'macOS'
         shell: bash

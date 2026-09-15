@@ -120,6 +120,11 @@ WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wintypes.HWND, wintypes.UINT,
                              WPARAM, LPARAM)
 
 
+def _as_ptr(obj):
+    """A ``c_void_p`` for a ctypes instance (safe for pointer-sized params)."""
+    return ctypes.cast(ctypes.byref(obj), ctypes.c_void_p)
+
+
 class Win32FileList:
     """A ``SysListView32`` file list hosted in a Qt widget's HWND."""
 
@@ -142,18 +147,85 @@ class Win32FileList:
         self._in_notify = False
 
     # ---------- creation ----------
+    def _load(self):
+        """Load the DLLs and declare signatures.
+
+        Declaring ``argtypes`` is essential: without it ctypes widens every
+        Python int to a 32-bit ``c_int`` and the 64-bit HWNDs/pointers we
+        pass (notably ``CallWindowProcW``'s old proc) are truncated, which
+        faults the process.
+        """
+        u = ctypes.WinDLL('user32', use_last_error=True)
+        s = ctypes.WinDLL('shell32', use_last_error=True)
+        c = ctypes.WinDLL('comctl32', use_last_error=True)
+        g = ctypes.WinDLL('gdi32', use_last_error=True)
+        try:
+            t = ctypes.WinDLL('uxtheme', use_last_error=True)
+        except Exception:
+            t = None
+
+        u.CreateWindowExW.restype = wintypes.HWND
+        u.CreateWindowExW.argtypes = [
+            wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR,
+            wintypes.DWORD, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            ctypes.c_int, wintypes.HWND, wintypes.HMENU, wintypes.HINSTANCE,
+            wintypes.LPVOID]
+        u.SendMessageW.restype = LRESULT
+        u.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, WPARAM,
+                                   ctypes.c_void_p]
+        u.MoveWindow.restype = wintypes.BOOL
+        u.MoveWindow.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                 ctypes.c_int, ctypes.c_int, wintypes.BOOL]
+        u.ShowWindow.restype = wintypes.BOOL
+        u.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+        u.CallWindowProcW.restype = LRESULT
+        u.CallWindowProcW.argtypes = [ctypes.c_void_p, wintypes.HWND,
+                                      wintypes.UINT, WPARAM, LPARAM]
+        u.DestroyIcon.restype = wintypes.BOOL
+        u.DestroyIcon.argtypes = [wintypes.HICON]
+
+        setter = getattr(u, 'SetWindowLongPtrW', None) or u.SetWindowLongW
+        setter.restype = ctypes.c_void_p
+        setter.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
+
+        s.DragAcceptFiles.restype = None
+        s.DragAcceptFiles.argtypes = [wintypes.HWND, wintypes.BOOL]
+        s.DragQueryFileW.restype = wintypes.UINT
+        s.DragQueryFileW.argtypes = [ctypes.c_void_p, wintypes.UINT,
+                                     wintypes.LPWSTR, wintypes.UINT]
+        s.DragFinish.restype = None
+        s.DragFinish.argtypes = [ctypes.c_void_p]
+        s.SHGetFileInfoW.restype = ctypes.c_size_t
+        s.SHGetFileInfoW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD,
+                                     ctypes.c_void_p, wintypes.UINT,
+                                     wintypes.UINT]
+
+        c.InitCommonControls.restype = None
+        c.InitCommonControls.argtypes = []
+        c.ImageList_Create.restype = ctypes.c_void_p
+        c.ImageList_Create.argtypes = [ctypes.c_int, ctypes.c_int,
+                                       wintypes.UINT, ctypes.c_int,
+                                       ctypes.c_int]
+        c.ImageList_AddIcon.restype = ctypes.c_int
+        c.ImageList_AddIcon.argtypes = [ctypes.c_void_p, wintypes.HICON]
+
+        if t is not None:
+            t.SetWindowTheme.restype = ctypes.c_long
+            t.SetWindowTheme.argtypes = [wintypes.HWND, wintypes.LPCWSTR,
+                                         wintypes.LPCWSTR]
+
+        self._user32 = u
+        self._shell32 = s
+        self._comctl32 = c
+        self._gdi32 = g
+        self._uxtheme = t
+        self._setter = setter
+
     def build(self):
         if sys.platform != 'win32':
             return False
         try:
-            self._user32 = ctypes.WinDLL('user32', use_last_error=True)
-            self._shell32 = ctypes.WinDLL('shell32', use_last_error=True)
-            self._comctl32 = ctypes.WinDLL('comctl32', use_last_error=True)
-            self._gdi32 = ctypes.WinDLL('gdi32', use_last_error=True)
-            try:
-                self._uxtheme = ctypes.WinDLL('uxtheme', use_last_error=True)
-            except Exception:
-                self._uxtheme = None
+            self._load()
 
             host = int(self.slot.winId())      # forces the widget native
             self._host = host
@@ -178,7 +250,7 @@ class Win32FileList:
             column.iSubItem = 0
             column.pszText = ctypes.c_wchar_p('')
             self._user32.SendMessageW(hwnd, LVM_INSERTCOLUMNW, 0,
-                                      ctypes.byref(column))
+                                      _as_ptr(column))
 
             self._apply_colours()
             self._shell32.DragAcceptFiles(hwnd, True)
@@ -200,12 +272,8 @@ class Win32FileList:
             palette = self.slot.palette()
             window = palette.color(QPalette.ColorRole.Window)
             text = palette.color(QPalette.ColorRole.WindowText)
-            base = palette.color(QPalette.ColorRole.Base)
-            bg = ctypes.c_ulong(window.red() | (window.green() << 8)
-                                | (window.blue() << 16))
-            fg = ctypes.c_ulong(text.red() | (text.green() << 8)
-                                | (text.blue() << 16))
-            highlight = base.red() | (base.green() << 8) | (base.blue() << 16)
+            bg = window.red() | (window.green() << 8) | (window.blue() << 16)
+            fg = text.red() | (text.green() << 8) | (text.blue() << 16)
             self._user32.SendMessageW(self._hwnd, LVM_SETBKCOLOR, 0, bg)
             self._user32.SendMessageW(self._hwnd, LVM_SETTEXTBKCOLOR, 0, bg)
             self._user32.SendMessageW(self._hwnd, LVM_SETTEXTCOLOR, 0, fg)
@@ -213,8 +281,7 @@ class Win32FileList:
                 dark = window.lightness() < 128
                 theme = 'DarkMode_Explorer' if dark else 'Explorer'
                 try:
-                    self._uxtheme.SetWindowTheme(
-                        self._hwnd, ctypes.c_wchar_p(theme), None)
+                    self._uxtheme.SetWindowTheme(self._hwnd, theme, None)
                 except Exception:
                     pass
         except Exception:
@@ -235,8 +302,7 @@ class Win32FileList:
                                     5 if self.slot.isVisible() else 0)
             # keep the single column as wide as the control
             self._user32.SendMessageW(
-                self._hwnd, LVM_SETCOLUMNWIDTH, 0,
-                ctypes.c_int(max(40, width - 4)))
+                self._hwnd, LVM_SETCOLUMNWIDTH, 0, max(40, width - 4))
         except Exception:
             pass
 
@@ -267,7 +333,7 @@ class Win32FileList:
         item.cchTextMax = len(Path(path).name) + 1
         item.iImage = self._icon_index(path)
         self._user32.SendMessageW(self._hwnd, LVM_INSERTITEMW, 0,
-                                  ctypes.byref(item))
+                                  _as_ptr(item))
 
     def _icon_index(self, path):
         """Shell icon index for a row (cached per kind)."""
@@ -289,8 +355,8 @@ class Win32FileList:
                 attributes = FILE_ATTRIBUTE_DIRECTORY
                 flags |= SHGFI_USEFILEATTRIBUTES
             self._shell32.SHGetFileInfoW(
-                ctypes.c_wchar_p(str(entry)), attributes,
-                ctypes.byref(info), ctypes.sizeof(info), flags)
+                str(entry), attributes, _as_ptr(info), ctypes.sizeof(info),
+                flags)
             index = -1
             if info.hIcon:
                 index = self._comctl32.ImageList_AddIcon(self._icon_list,
@@ -361,7 +427,7 @@ class Win32FileList:
             item.state = LVIS_SELECTED | (LVIS_FOCUSED if selected else 0)
             item.stateMask = LVIS_SELECTED | LVIS_FOCUSED
             self._user32.SendMessageW(self._hwnd, LVM_SETITEMSTATE, row,
-                                      ctypes.byref(item))
+                                      _as_ptr(item))
 
     def select_index(self, row):
         self.select_rows([row])
@@ -380,15 +446,15 @@ class Win32FileList:
     def _subclass_host(self):
         """Observe selection changes (WM_NOTIFY) on the hosting widget."""
         self._proc_ref = WNDPROC(self._host_proc)
-        setter = getattr(self._user32, 'SetWindowLongPtrW', None) \
-            or self._user32.SetWindowLongW
-        self._old_proc = setter(self._host, GWLP_WNDPROC,
-                                ctypes.cast(self._proc_ref, ctypes.c_void_p))
+        self._old_proc = self._setter(
+            self._host, GWLP_WNDPROC,
+            ctypes.cast(self._proc_ref, ctypes.c_void_p))
 
     def _host_proc(self, hwnd, msg, wparam, lparam):
         try:
             if msg == WM_NOTIFY and self._hwnd is not None:
-                header = ctypes.cast(lparam, ctypes.POINTER(NMHDR)).contents
+                header = ctypes.cast(ctypes.c_void_p(lparam),
+                                     ctypes.POINTER(NMHDR)).contents
                 if (int(header.hwndFrom or 0) == self._hwnd
                         and ctypes.c_int(header.code).value == LVN_ITEMCHANGED
                         and not self._in_notify):
@@ -427,10 +493,8 @@ class Win32FileList:
 
     def _restore_host(self):
         try:
-            setter = getattr(self._user32, 'SetWindowLongPtrW', None) \
-                or self._user32.SetWindowLongW
             if self._old_proc:
-                setter(self._host, GWLP_WNDPROC, self._old_proc)
+                self._setter(self._host, GWLP_WNDPROC, self._old_proc)
         except Exception:
             pass
 
