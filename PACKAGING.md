@@ -112,6 +112,24 @@ PyInstaller 不支持跨平台编译, Windows/Linux 版本通过 CI 在对应系
 * 备份文件后缀为 `.bak`, 因此后续扫描不会把 `backup/` 里的备份当作待处理文件;
   关闭备份可用命令行 `--no-backup` 或取消勾选 "生成备份文件 (backup/*.bak)"。
 
+### macOS 原生视图一览
+
+macOS 上这些区域已是 AppKit 原生视图 (叠加在提供几何位置的 Qt 槽位之上):
+
+* **文件列表**: `NSTableView` (透明 `NSScrollView`, plain 样式, 原生行分隔线,
+  原生强调色选择/失焦变暗, ⌘⇧ 多选, Finder 拖放, 原生文件图标/文件名/完整路径提示);
+* **差异面板**: 只读可选的 `NSTextView` (等宽 `monospacedSystemFont`,
+  透明背景, 增/删/元信息按调色板上色; ⌘C/⌘A 由原生 Edit 菜单的响应链送达);
+* **± 按钮**: `NSSegmentedControl` (Small Square + `NSAddTemplate`/
+  `NSRemoveTemplate` + momentary, 行高=控件原生高度);
+* **侧栏开关**: `NSSwitch`; **窗口标题**: 自绘 `NSTextField`;
+* **标题栏/侧栏材质**: `NSVisualEffectView` (色带 + 侧栏 + 页脚材料条);
+* **菜单**: 原生 `NSMenu` (见下).
+
+其余控件 (选项复选框、下拉、应用按钮、状态栏) 仍为 Qt (Windows/Linux 亦同),
+后续阶段将替换为 `NSPopUpButton`/`NSButton`/`NSTextField`, 最终在 macOS 上
+完全移除 Qt.
+
 ### macOS 菜单与快捷键
 
 * macOS 上使用**原生 `NSMenu`** (不再是 Qt 菜单栏): File ▸ Close Window (⌘W),

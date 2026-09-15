@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
 
 from format_tex import (FormatOptions, backup_path, format_file,
                         make_backup, scan_directory)
+from diff_view import create_diff_view
 from filelist_view import create_file_list_view
 from native_mac import menus
 from native_menu import (CUSTOM_SENTINEL, build_menu, menu_entries,
@@ -608,6 +609,7 @@ class MainWindow(QMainWindow):
         # _effects_applied exists: inserting a native subview fires Qt
         # window events.
         self.files_view = create_file_list_view(self)
+        self.diff_view = create_diff_view(self)
         # menus last: creating the menu bar triggers window events
         self._build_menus()
 
@@ -836,6 +838,7 @@ class MainWindow(QMainWindow):
         self._setup_native_switch()
         self._setup_native_plus_minus()
         self.files_view.build()
+        self.diff_view.build()
         if debug_enabled():
             # FORMAT_TEX_DEBUG=1: outline the content surface too
             self.content_panel.setStyleSheet(
@@ -858,6 +861,8 @@ class MainWindow(QMainWindow):
         reposition_materials(self)
         if hasattr(self, 'files_view'):
             self.files_view.place()
+        if hasattr(self, 'diff_view'):
+            self.diff_view.place()
         if sys.platform == 'darwin' and menus.installed() \
                 and not menus.is_current():
             menus.install(self)
@@ -1420,12 +1425,12 @@ class MainWindow(QMainWindow):
             QApplication.processEvents()
             self.files_view.select_index(1)
             QApplication.processEvents()
-            only_second = (str(f2) in self.output.toPlainText()
-                           and str(f1) not in self.output.toPlainText())
+            only_second = (str(f2) in self._output_text()
+                           and str(f1) not in self._output_text())
             self.files_view.select_rows([0, 1])
             QApplication.processEvents()
-            both = (str(f1) in self.output.toPlainText()
-                    and str(f2) in self.output.toPlainText())
+            both = (str(f1) in self._output_text()
+                    and str(f2) in self._output_text())
             # applying writes only the selected file
             self.files_view.clear()
             self._add_paths([(str(f1), str(seltmp)), (str(f2), str(seltmp))])
@@ -1581,6 +1586,62 @@ class MainWindow(QMainWindow):
             ok = ok and ui_ok
 
             shutil.rmtree(seltmp, ignore_errors=True)
+
+            # native diff pane (macOS): read-only, monospaced, and the
+            # diff tags really carry their colours
+            if getattr(self.diff_view, 'native', False) \
+                    and getattr(self.diff_view, 'active', False):
+                pane = self.diff_view
+                pane.clear()
+                pane.append('plain ', None)
+                pane.append('+added\n', 'add')
+                pane.append('-removed\n', 'del')
+                pane.append('meta\n', 'meta')
+                storage = pane.view._view.textStorage()
+
+                def colour_at(index):
+                    attributes = storage.attributesAtIndex_effectiveRange_(
+                        index, None)
+                    if isinstance(attributes, tuple):
+                        attributes = attributes[0]
+                    colour = (attributes or {}).get(
+                        AppKit.NSForegroundColorAttributeName)
+                    if colour is None:
+                        return None
+                    colour = colour.colorUsingColorSpace_(
+                        AppKit.NSColorSpace.sRGBColorSpace())
+                    if colour is None:
+                        return None
+                    return '#{:02x}{:02x}{:02x}'.format(
+                        round(colour.redComponent() * 255),
+                        round(colour.greenComponent() * 255),
+                        round(colour.blueComponent() * 255))
+
+                pane_ok = (pane.view.is_read_only()
+                           and pane.view.font_is_monospaced()
+                           and pane.text().startswith('plain +added')
+                           and colour_at(8) == self.pal['add'].lower()
+                           and colour_at(16) == self.pal['del'].lower())
+
+                def pane_fits():
+                    slot = self.output
+                    tl = slot.mapTo(self, QPoint(1, 1))
+                    rect = ((float(tl.x()), float(tl.y())),
+                            (float(slot.width() - 2),
+                             float(slot.height() - 2)))
+                    return inside(pane.view.scroll_view().frame(),
+                                  qt_view.convertRect_toView_(rect, theme))
+
+                fits_ok = pane_fits()
+                self.resize(self.width() + 40, self.height() + 30)
+                QApplication.processEvents()
+                fits_ok = fits_ok and pane_fits()
+                pane.clear()
+                lines.append('native diff pane: read-only + monospaced + '
+                             'tag colours + text {}, inside the frame '
+                             '(also after resize) {}: {}'.format(
+                                 pane_ok, fits_ok, pane_ok and fits_ok))
+                ok = ok and pane_ok and fits_ok
 
             # option checkboxes: no heading, reflow 2x3 <-> 3x2 by
             # width, equally wide columns spread across the panel
@@ -1740,16 +1801,16 @@ class MainWindow(QMainWindow):
             pass
 
     def append(self, text, fmt=None):
-        cursor = self.output.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        if fmt is None:
-            cursor.insertText(text)
-        else:
-            cursor.insertText(text, fmt)
-        self.output.setTextCursor(cursor)
+        """Append to the diff pane (native NSTextView on macOS, Qt
+        elsewhere)."""
+        self.diff_view.append(text, fmt)
 
     def clear_output(self):
-        self.output.clear()
+        self.diff_view.clear()
+
+    def _output_text(self):
+        """The diff pane's plain text (the tests read this)."""
+        return self.diff_view.text()
 
     def write_encoding(self):
         value = self.enc_out.currentText().strip()

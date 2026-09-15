@@ -9,6 +9,7 @@ exposes small accessors for the application and the self-test.
 """
 
 from . import menus
+from .diffview import NativeDiffView
 from .filelist import NativeFileList
 
-__all__ = ['NativeFileList', 'menus']
+__all__ = ['NativeDiffView', 'NativeFileList', 'menus']
