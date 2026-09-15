@@ -294,6 +294,7 @@ class Win32FileListAdapter:
             on_drop=window.drop_paths,
             colours=self._colours())
         self.active = False
+        self._failed = False
         self._fallback = None
 
     def _colours(self):
@@ -308,6 +309,8 @@ class Win32FileListAdapter:
     def build(self):
         if self.active:
             return True
+        if self._failed:
+            return False
         try:
             self.active = bool(self.view.build())
         except Exception:
@@ -316,6 +319,7 @@ class Win32FileListAdapter:
             self._sync_hint()
             self.place()
             return True
+        self._failed = True
         return False
 
     def _impl(self):

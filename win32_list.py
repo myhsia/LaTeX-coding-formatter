@@ -181,7 +181,7 @@ class Win32FileList:
                                       ctypes.byref(column))
 
             self._apply_colours()
-            self._user32.DragAcceptFiles(hwnd, True)
+            self._shell32.DragAcceptFiles(hwnd, True)
             self._subclass_host()
             # the control must fill the widget before it is shown
             self.place()
