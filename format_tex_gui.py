@@ -120,7 +120,10 @@ class OptionControl:
         self.native = None
 
     def build_native(self):
+        if sys.platform == 'win32':
+            return self._build_win32()
         if sys.platform != 'darwin':
+            self._use_qt()
             return False
         from native_mac import NativeCheckbox
 
@@ -133,7 +136,39 @@ class OptionControl:
             self.slot.setFixedSize(max(int(width) + 2, 120),
                                    max(int(height) + 2, 22))
             self.qt.setChecked(self.checked)
+            self.qt.setVisible(False)
+        else:
+            self.native = None
+            self._use_qt()
         return built
+
+    def _build_win32(self):
+        from win32_controls import Win32Checkbox
+
+        try:
+            self.native = Win32Checkbox(
+                self.window, self.slot, self.title, self.checked,
+                on_toggle=self._toggled)
+        except Exception:
+            self.native = None
+        built = bool(self.native is not None and self.native.build())
+        if built:
+            self.qt.setChecked(self.checked)
+            self.qt.setVisible(False)
+            return True
+        self.native = None
+        self._use_qt()
+        return False
+
+    def _use_qt(self):
+        """Fallback: the Qt checkbox was never laid out (the grid holds the
+        slot), so make it a visible child of the slot instead."""
+        if self.qt.parent() is not self.slot:
+            self.qt.setParent(self.slot)
+            box = QVBoxLayout(self.slot)
+            box.setContentsMargins(0, 0, 0, 0)
+            box.addWidget(self.qt)
+        self.qt.setVisible(True)
 
     def _toggled(self, checked):
         self.checked = bool(checked)
@@ -174,6 +209,8 @@ class PopUpControl:
         self.slot.setFixedSize(max(90, qt.sizeHint().width() + 10), 24)
 
     def build_native(self):
+        if sys.platform == 'win32':
+            return self._build_win32()
         if sys.platform != 'darwin':
             return False
         from native_mac import NativePopUpButton
@@ -189,7 +226,27 @@ class PopUpControl:
             # the native popup covers it: a visible Qt combo would push
             # the slot past the layout margin
             self.qt.setVisible(False)
+        else:
+            self.native = None
+            self.qt.setVisible(True)
         return built
+
+    def _build_win32(self):
+        from win32_controls import Win32PopUp
+
+        try:
+            self.native = Win32PopUp(
+                self.window, self.slot, self.items, self.current,
+                on_change=self._changed, custom_label=self.custom_label)
+        except Exception:
+            self.native = None
+        built = bool(self.native is not None and self.native.build())
+        if built:
+            self.qt.setVisible(False)
+            return True
+        self.native = None
+        self.qt.setVisible(True)
+        return False
 
     def _changed(self, title):
         # the custom entry reuses the Qt dialog flow, then mirrors the
@@ -240,6 +297,8 @@ class ButtonControl:
                                max(qt.sizeHint().height(), 26))
 
     def build_native(self):
+        if sys.platform == 'win32':
+            return self._build_win32()
         if sys.platform != 'darwin':
             return False
         from native_mac import NativePushButton
@@ -252,7 +311,26 @@ class ButtonControl:
             self.slot.setFixedSize(max(int(width) + 2, 90),
                                    max(int(height) + 2, 26))
             self.qt.setVisible(False)
+        else:
+            self.native = None
+            self.qt.setVisible(True)
         return built
+
+    def _build_win32(self):
+        from win32_controls import Win32PushButton
+
+        try:
+            self.native = Win32PushButton(self.window, self.slot, self.title,
+                                          on_click=self.on_click)
+        except Exception:
+            self.native = None
+        built = bool(self.native is not None and self.native.build())
+        if built:
+            self.qt.setVisible(False)
+            return True
+        self.native = None
+        self.qt.setVisible(True)
+        return False
 
     def setEnabled(self, value):
         self.qt.setEnabled(bool(value))
@@ -284,6 +362,8 @@ class LabelControl:
         self.slot.setMinimumWidth(60)
 
     def build_native(self):
+        if sys.platform == 'win32':
+            return self._build_win32()
         if sys.platform != 'darwin':
             return False
         from native_mac import NativeLabel
@@ -295,16 +375,35 @@ class LabelControl:
             self.slot.setFixedSize(max(int(width) + 4, 60),
                                    max(int(height) + 2, 20))
             self.qt.setVisible(False)
+        else:
+            self.native = None
+            self.qt.setVisible(True)
         return built
+
+    def _build_win32(self):
+        from win32_controls import Win32Label
+
+        try:
+            self.native = Win32Label(self.window, self.slot, self._text)
+        except Exception:
+            self.native = None
+        built = bool(self.native is not None and self.native.build())
+        if built:
+            self.qt.setVisible(False)
+            return True
+        self.native = None
+        self.qt.setVisible(True)
+        return False
 
     def setText(self, text):
         self._text = str(text)
         self.qt.setText(self._text)
         if self.native is not None and self.native.active:
             self.native.setText(self._text)
-            width, height = self.native.size()
-            self.slot.setFixedSize(max(int(width) + 4, 60),
-                                   max(int(height) + 2, 20))
+            if sys.platform == 'darwin':
+                width, height = self.native.size()
+                self.slot.setFixedSize(max(int(width) + 4, 60),
+                                       max(int(height) + 2, 20))
 
     def text(self):
         if self.native is not None and self.native.active:
@@ -2257,6 +2356,9 @@ class MainWindow(QMainWindow):
             note('option controls consistent: {}'.format(opts_ok))
             ok = ok and opts_ok
 
+            note('checking native controls')
+            ok = self._self_test_controls(note) and ok
+
             menu_ok = bool(self.menuBar().actions())
             note('menu bar present: {}'.format(menu_ok))
             ok = ok and menu_ok
@@ -2271,6 +2373,69 @@ class MainWindow(QMainWindow):
                 result + '\n' + '\n'.join(lines) + '\n', encoding='utf-8')
         except Exception:
             pass
+        return ok
+
+    def _self_test_controls(self, note):
+        """Report which native controls are hosting and, where they are,
+        check that they mirror the Qt model (state, text, enable, popup).
+
+        On Windows every control should host a real Win32 widget; on Linux
+        nothing does (Qt is the only toolkit), which is reported as 0/6."""
+        def native_on(wrapper):
+            native = getattr(wrapper, 'native', None)
+            return bool(native is not None
+                        and getattr(native, 'active', False))
+
+        options = [wr for _s, wr in self._option_widgets]
+        active = sum(1 for wr in options if native_on(wr))
+        note('native controls: options {}/{} ext {} enc {} apply {} '
+             'status {}'.format(
+                 active, len(options), native_on(self.ext_edit),
+                 native_on(self.enc_out), native_on(self.btn_apply),
+                 native_on(self.status_label)))
+        ok = True
+
+        if active:
+            probe = self.chk_check
+            before = probe.isChecked()
+            probe.setChecked(not before)
+            QApplication.processEvents()
+            mirror = (probe.isChecked() != before
+                      and probe.qt.isChecked() == probe.isChecked())
+            if native_on(probe):
+                mirror = mirror and (
+                    probe.native.isChecked() == probe.isChecked())
+            probe.setChecked(before)
+            note('native checkbox toggle round-trip: {}'.format(mirror))
+            ok = ok and mirror
+
+        if native_on(self.btn_apply):
+            self.btn_apply.setEnabled(False)
+            disabled = not self.btn_apply.native.isEnabled()
+            self.btn_apply.setEnabled(True)
+            enabled = self.btn_apply.native.isEnabled()
+            note('native apply button disabled/enabled: {}/{}'.format(
+                disabled, enabled))
+            ok = ok and disabled and enabled
+
+        if native_on(self.status_label):
+            probe = '状态检查'
+            self.status_label.setText(probe)
+            label_ok = (self.status_label.text() == probe
+                        and self.status_label.native.text() == probe)
+            self.status_label.setText('就绪')
+            note('native status label text mirrors: {}'.format(label_ok))
+            ok = ok and label_ok
+
+        if native_on(self.enc_out):
+            popup_ok = self.enc_out.currentText() == '同输入'
+            self.enc_out.setCurrentText('utf-8')
+            popup_ok = popup_ok and (
+                self.enc_out.currentText() == 'utf-8'
+                and self.enc_out.qt.currentText() == 'utf-8')
+            self.enc_out.setCurrentText('同输入')
+            note('native encoding popup round-trip: {}'.format(popup_ok))
+            ok = ok and popup_ok
         return ok
 
     def log_path(self):
