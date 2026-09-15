@@ -114,18 +114,16 @@ PyInstaller 不支持跨平台编译, Windows/Linux 版本通过 CI 在对应系
 
 ### macOS 菜单与快捷键
 
-* 菜单栏由 Qt 的 `QMenuBar` 提供 (显示在系统菜单栏), 含三组菜单:
-  **File ▸ Close (⌘W)**、**Edit** (Undo ⌘Z / Redo ⇧⌘Z / Cut ⌘X / Copy ⌘C /
-  Paste ⌘V / Delete / Select All ⌘A, 按当前焦点控件自动置灰, 例如只读的
-  差异面板只启用 Copy 与 Select All)、**Window ▸ Minimize (⌘M) / Zoom /
-  Bring All to Front**; 应用菜单 (About/Services/Hide/**Quit ⌘Q**) 由 Qt
-  自动提供. Minimize/Zoom/Bring All to Front 调用 AppKit 原生命令
-  (`performMiniaturize:`/`performZoom:`/`arrangeInFront:`, 与红黄绿按钮同源),
-  失败时回退到 Qt.
-* 此前没有任何 Close 命令, 因此 macOS 的 ⌘W 无人处理 (只有 ⌘Q 生效);
-  现在 ⌘W 与红色关闭按钮走同一条 Qt 关闭流程, 关闭最后一个窗口即退出
-  (与计算器等单窗口工具一致, `quitOnLastWindowClosed` 保持默认 True).
-
+* macOS 上使用**原生 `NSMenu`** (不再是 Qt 菜单栏): File ▸ Close Window (⌘W),
+  Edit ▸ Undo/Redo/Cut/Copy/Paste/Delete/Select All, Window ▸ Minimize (⌘M) /
+  Zoom / Bring All to Front, 以及应用菜单 (About/Hide/Quit ⌘Q).
+* File/Window 项使用 nil target, 由响应链交给窗口/应用处理; Edit 项经过一个
+  **桥接对象**: 先询问 AppKit 响应链 (因此 ⌘A/⌘C 能作用于原生 `NSTableView`
+  等原生视图), 若无人响应再回退到**当前焦点的 Qt 控件** (因此 Qt 文本框等仍
+  可用); 菜单项按可用性自动置灰 (`validateMenuItem:`).
+* Qt 的 cocoa 插件会在我们安装菜单后**追加**自己的标准项 (如 File ▸ Close
+  All), 因此每次安装/重装都会**剥离非本程序的项** (按 tag 识别), 并在窗口
+  激活时重新确认菜单仍生效. 其他平台仍使用 Qt 菜单栏 (同一套命令与快捷键).
 ### macOS 外观与 SDK 标记
 
 * PyInstaller 使用预编译的 bootloader, 因此我们的可执行文件默认带的是很旧的

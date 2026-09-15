@@ -67,6 +67,7 @@ jobs:
           python -m PyInstaller --onefile --windowed --name format-tex-gui
           --distpath dist --workpath pyibuild --specpath pyibuild
           --hidden-import native_mac --hidden-import filelist_view
+          --hidden-import native_mac.menus
           $PYINSTALLER_EXCLUDES format_tex_gui.py
       - name: Build CLI (onefile)
         shell: bash

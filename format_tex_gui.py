@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
 from format_tex import (FormatOptions, backup_path, format_file,
                         make_backup, scan_directory)
 from filelist_view import create_file_list_view
+from native_mac import menus
 from native_menu import (CUSTOM_SENTINEL, build_menu, menu_entries,
                          popup_native_menu)
 from platform_effects import (apply_effects, arrange_in_front,
@@ -662,12 +663,21 @@ class MainWindow(QMainWindow):
         self.options_grid.invalidate()
 
     def _build_menus(self):
-        """macOS menu bar, so the standard shortcuts work and are
-        discoverable: File (Close, Cmd+W), Edit (the standard editing
-        commands) and Window (Minimize Cmd+M, Zoom, Bring All to Front).
-        Qt supplies the application menu (About/Services/Hide/Quit Cmd+Q)
-        automatically. Before this there was no Close command anywhere, so
-        Cmd+W silently did nothing and only Cmd+Q worked."""
+        """macOS: the native NSMenu is installed from apply_window_effects
+        (a Qt menu bar would take the app menu over); elsewhere the Qt menu
+        bar below is used."""
+        if sys.platform == 'darwin':
+            # do not touch menuBar() at all: creating a Qt menu bar makes
+            # Qt install and merge its own NSMenu items (e.g. Close All)
+            return None
+        return self._build_qt_menus()
+
+    def _build_qt_menus(self):
+        """Qt menu bar (non-macOS, and the fallback if the native menu
+        cannot be installed): File (Close, Cmd+W), Edit (the standard
+        editing commands) and Window (Minimize Cmd+M, Zoom, Bring All to
+        Front). Before this there was no Close command anywhere, so Cmd+W
+        silently did nothing and only Cmd+Q worked."""
         bar = self.menuBar()
         bar.setNativeMenuBar(True)
 
@@ -820,6 +830,9 @@ class MainWindow(QMainWindow):
     def apply_window_effects(self):
         self.effect_note = apply_effects(self, self.dark)
         self._effects_applied = True
+        if sys.platform == 'darwin':
+            if not menus.install(self):
+                self._build_qt_menus()
         self._setup_native_switch()
         self._setup_native_plus_minus()
         self.files_view.build()
@@ -845,6 +858,9 @@ class MainWindow(QMainWindow):
         reposition_materials(self)
         if hasattr(self, 'files_view'):
             self.files_view.place()
+        if sys.platform == 'darwin' and menus.installed() \
+                and not menus.is_current():
+            menus.install(self)
 
     def _setup_native_switch(self):
         """Use a real NSSwitch for 含子目录; fall back to the Qt
@@ -1602,29 +1618,68 @@ class MainWindow(QMainWindow):
             self.splitter.setSizes([240, 740])
             QApplication.processEvents()
 
-            # --- menu bar: standard commands, so Cmd+W etc. work ---
-            menus = [a.text().replace('&', '')
-                     for a in self.menuBar().actions()]
-            want_keys = {'Undo': 'Ctrl+Z', 'Redo': 'Ctrl+Shift+Z',
-                         'Cut': 'Ctrl+X', 'Copy': 'Ctrl+C',
-                         'Paste': 'Ctrl+V', 'Select All': 'Ctrl+A'}
-            close_key = QKeySequence(QKeySequence.StandardKey.Close)
-            menu_ok = (menus[:3] == ['File', 'Edit', 'Window']
-                       and len(menus) == len(set(menus))
-                       and self.action_close.shortcut() == close_key
-                       and self.action_minimize.shortcut().toString()
-                       == 'Ctrl+M'
-                       and set(self.edit_actions)
-                       == set(want_keys) | {'Delete'}
-                       and all(self.edit_actions[n].shortcut().toString() == k
-                               for n, k in want_keys.items()))
-            lines.append('menu bar File/Edit/Window, Close {} ({}), Minimize '
-                         '{}: {}'.format(
-                             self.action_close.shortcut().toString(),
-                             'std' if close_key.toString() == 'Ctrl+W'
-                             else '?',
-                             self.action_minimize.shortcut().toString(),
-                             menu_ok))
+            # --- menus: native NSMenu on macOS, Qt menu bar elsewhere ---
+            if sys.platform == 'darwin' and menus.installed():
+                cmd = AppKit.NSEventModifierFlagCommand
+                titles = menus.menu_titles()
+                file_items = menus.items_of('File')
+                edit_items = menus.items_of('Edit')
+                window_items = menus.items_of('Window')
+                names = [t for t, _k, _m, _t in edit_items if t]
+                keys = {t: (k, m) for t, k, m, _t in edit_items if t}
+                menu_ok = (
+                    titles[-3:] == ['File', 'Edit', 'Window']
+                    and [t for t, _k, _m, _t in file_items]
+                    == ['Close Window']
+                    and file_items[0][1] == 'w'
+                    and file_items[0][2] == int(cmd)
+                    and names == ['Undo', 'Redo', 'Cut', 'Copy', 'Paste',
+                                  'Delete', 'Select All']
+                    and keys['Copy'] == ('c', int(cmd))
+                    and keys['Select All'] == ('a', int(cmd))
+                    and [t for t, _k, _m, _t in window_items]
+                    == ['Minimize', 'Zoom', 'Bring All to Front']
+                    and menus.is_current())
+                # Cmd+A must reach the native table through the responder
+                # chain (the reason the menus had to become native)
+                responder_ok = False
+                if self.files_view.native and self.files_view.count():
+                    AppKit.NSApp().targetForAction_to_from_(
+                        b'selectAll:', None, None)
+                    nswin.makeFirstResponder_(self.files_view.view._table)
+                    self.files_view.select_rows([])
+                    QApplication.processEvents()
+                    menu_bridge = menus.edit_bridge()
+                    if menu_bridge is not None:
+                        menu_bridge.selectAll_(None)
+                    QApplication.processEvents()
+                    responder_ok = (self.files_view.selection_rows()
+                                    == list(range(self.files_view.count())))
+                menu_ok = menu_ok and responder_ok
+                lines.append('native menu File/Edit/Window, Close Cmd+W, '
+                             'standard Edit keys, Cmd+A reaches the list {}: '
+                             '{}'.format(responder_ok, menu_ok))
+            else:
+                qt_menus = [a.text().replace('&', '')
+                            for a in self.menuBar().actions()]
+                want_keys = {'Undo': 'Ctrl+Z', 'Redo': 'Ctrl+Shift+Z',
+                             'Cut': 'Ctrl+X', 'Copy': 'Ctrl+C',
+                             'Paste': 'Ctrl+V', 'Select All': 'Ctrl+A'}
+                close_key = QKeySequence(QKeySequence.StandardKey.Close)
+                menu_ok = (qt_menus[:3] == ['File', 'Edit', 'Window']
+                           and len(qt_menus) == len(set(qt_menus))
+                           and self.action_close.shortcut() == close_key
+                           and self.action_minimize.shortcut().toString()
+                           == 'Ctrl+M'
+                           and set(self.edit_actions)
+                           == set(want_keys) | {'Delete'}
+                           and all(self.edit_actions[n].shortcut().toString()
+                                   == k for n, k in want_keys.items()))
+                lines.append('menu bar File/Edit/Window, Close {}, Minimize '
+                             '{}: {}'.format(
+                                 self.action_close.shortcut().toString(),
+                                 self.action_minimize.shortcut().toString(),
+                                 menu_ok))
             ok = ok and menu_ok
         except Exception as exc:
             lines.append('self-test exception: {}: {}'.format(
@@ -1639,7 +1694,16 @@ class MainWindow(QMainWindow):
         # the File > Close command must really close the window (this is
         # checked last: it hides the window the other checks need)
         try:
-            self.action_close.trigger()
+            if sys.platform == 'darwin' and menus.installed():
+                # the native File > Close Window item sends performClose:
+                # along the responder chain - exercise exactly that
+                import objc
+                nswin = objc.objc_object(
+                    c_void_p=int(self.winId())).window()
+                AppKit.NSApp().sendAction_to_from_(
+                    b'performClose:', nswin, None)
+            else:
+                self.action_close.trigger()
             QApplication.processEvents()
             close_works = not self.isVisible()
         except Exception as exc:
