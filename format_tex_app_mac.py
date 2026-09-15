@@ -64,6 +64,7 @@ class MacApp:
         self._build_sidebar(AppKit)
         self._build_content(AppKit)
         self.shell.on_layout = self._layout_children
+        self.update_hint()
         menus.install(self)
         self.shell.show()
         self.shell.layout()
@@ -110,6 +111,35 @@ class MacApp:
         group.addSubview_(switch)
         self.switch = switch
         self.switch_host = host
+
+        # empty-state hint (the Qt app's placeholder: text + two links)
+        hint_host = AppKit.NSView.alloc().init()
+        shell.sidebar_host.addSubview_(hint_host)
+        hint = AppKit.NSTextField.alloc().init()
+        hint.setBezeled_(False)
+        hint.setDrawsBackground_(False)
+        hint.setEditable_(False)
+        hint.setSelectable_(False)
+        hint.setAlignment_(AppKit.NSTextAlignmentCenter)
+        hint.setStringValue_('Click or drag and drop files/folders\n'
+                             'into the box')
+        hint.setFont_(AppKit.NSFont.systemFontOfSize_(13.0))
+        hint.sizeToFit()
+        hint_host.addSubview_(hint)
+        links = []
+        for title, action in (('选择文件', self.choose_files),
+                              ('选择目录', self.choose_folder)):
+            button = AppKit.NSButton.alloc().init()
+            button.setTitle_(title)
+            button.setBordered_(False)
+            button.setFont_(AppKit.NSFont.systemFontOfSize_(13.0))
+            button.setTarget_(self._link_target())
+            button.setTag_(len(links))
+            button.sizeToFit()
+            hint_host.addSubview_(button)
+            links.append(button)
+        self.hint_host, self.hint_label, self.hint_links = (
+            hint_host, hint, links)
 
         # file list over the sidebar host
         self.list = NativeFileList(None, ViewTarget(shell.sidebar_host),
@@ -207,6 +237,34 @@ class MacApp:
         self.status.build()
         self.status_host = status_slot
 
+    def _link_target(self):
+        if getattr(self, '_link_target_obj', None) is None:
+            from AppKit import NSObject
+
+            class _Links(NSObject):
+                def clicked_(self, sender):
+                    owner = getattr(self, 'owner', None)
+                    if owner is None:
+                        return
+                    if int(sender.tag()) == 0:
+                        owner.choose_files()
+                    else:
+                        owner.choose_folder()
+
+            target = _Links.alloc().init()
+            target.owner = self
+            self._link_target_obj = target
+        return self._link_target_obj
+
+    def update_hint(self):
+        try:
+            empty = bool(self.list is None or not self.list.count())
+            self.hint_host.setHidden_(not empty)
+            if self.list is not None:
+                self.list._refresh_visibility()
+        except Exception:
+            pass
+
     def _popup_size(self):
         try:
             size = self.ext_popup.view.frame().size
@@ -272,6 +330,19 @@ class MacApp:
 
             if self.list is not None:
                 self.list.place()
+            host = shell.sidebar_host.bounds()
+            self.hint_host.setFrame_(host)
+            hint_size = self.hint_label.frame().size
+            total = sum(b.frame().size.width for b in self.hint_links) + 16.0
+            y = host.size.height / 2.0
+            self.hint_label.setFrameOrigin_(
+                ((host.size.width - hint_size.width) / 2.0,
+                 y + 6.0))
+            x = (host.size.width - total) / 2.0
+            for button in self.hint_links:
+                size = button.frame().size
+                button.setFrameOrigin_((x, y - size.height - 6.0))
+                x += size.width + 16.0
             if self.diff is not None:
                 self.diff.place()
 
@@ -384,6 +455,7 @@ class MacApp:
         added = self.list.add(entries)
         if added and not self.list.has_selection():
             self.list.select_index(0)
+        self.update_hint()
         self.update_remove_enabled()
         self.set_status('已选择 {} 个文件 (新增 {} 个)'.format(
             self.list.count(), added))
@@ -412,6 +484,7 @@ class MacApp:
     def remove_selected(self):
         if self.list is not None:
             self.list.remove_selected()
+        self.update_hint()
         self.update_remove_enabled()
         if self.list is not None and not self.list.count():
             self.clear_output()
