@@ -51,13 +51,15 @@ def _make_target(owner):
     return target
 
 
-def _place_centred(window, view, target, align_left=True):
-    """Fit ``view`` into ``target``: native size, left aligned (or filling)
-    and vertically centred - works for a Qt slot or a native view."""
+def _place_centred(window, view, target, align_left=True, natural=None):
+    """Fit ``view`` into ``target``: its natural size, left aligned (or
+    filling) and vertically centred - works for a Qt slot or a native view.
+    ``natural`` is the size measured before any squeeze, so repeated
+    placements cannot shrink the view to a stale slot."""
     import platform_effects as pe
 
     rect = target.rect()
-    native = view.frame().size
+    native = natural if natural is not None else view.frame().size
     height = min(native.height, rect.size.height)
     y = rect.origin.y + (rect.size.height - height) / 2.0
     if align_left:
@@ -103,6 +105,7 @@ class NativeCheckbox:
                 button.setAction_(b'toggled:')
                 button.sizeToFit()
                 self.view = button
+            self._natural = self.view.frame().size
             self._target = pe.as_target(self.window, self.slot, inset=1.0)
             if not pe.place_in(self.window, self._target, self.view):
                 return False
@@ -144,7 +147,13 @@ class NativeCheckbox:
 
     def place(self):
         if self.active and self.view is not None:
-            _place_centred(self.window, self.view, self._target)
+            if isinstance(self, NativeLabel) and self.fill:
+                _place_centred(self.window, self.view, self._target,
+                               align_left=False,
+                               natural=getattr(self, '_natural', None))
+            else:
+                _place_centred(self.window, self.view, self._target,
+                               natural=getattr(self, '_natural', None))
 
     def size(self):
         if self.view is None:
@@ -190,6 +199,7 @@ class NativePopUpButton:
                     popup.selectItemWithTitle_(self._current)
                 popup.sizeToFit()
                 self.view = popup
+            self._natural = self.view.frame().size
             self._target = pe.as_target(self.window, self.slot, inset=1.0)
             if not pe.place_in(self.window, self._target, self.view):
                 return False
@@ -236,7 +246,13 @@ class NativePopUpButton:
 
     def place(self):
         if self.active and self.view is not None:
-            _place_centred(self.window, self.view, self._target)
+            if isinstance(self, NativeLabel) and self.fill:
+                _place_centred(self.window, self.view, self._target,
+                               align_left=False,
+                               natural=getattr(self, '_natural', None))
+            else:
+                _place_centred(self.window, self.view, self._target,
+                               natural=getattr(self, '_natural', None))
 
     def size(self):
         if self.view is None:
@@ -273,6 +289,7 @@ class NativePushButton:
                 button.setAction_(b'clicked:')
                 button.sizeToFit()
                 self.view = button
+            self._natural = self.view.frame().size
             self._target = pe.as_target(self.window, self.slot, inset=1.0)
             if not pe.place_in(self.window, self._target, self.view):
                 return False
@@ -306,7 +323,13 @@ class NativePushButton:
 
     def place(self):
         if self.active and self.view is not None:
-            _place_centred(self.window, self.view, self._target)
+            if isinstance(self, NativeLabel) and self.fill:
+                _place_centred(self.window, self.view, self._target,
+                               align_left=False,
+                               natural=getattr(self, '_natural', None))
+            else:
+                _place_centred(self.window, self.view, self._target,
+                               natural=getattr(self, '_natural', None))
 
     def size(self):
         if self.view is None:
@@ -316,9 +339,11 @@ class NativePushButton:
 
 
 class NativeLabel:
-    """``NSTextField`` label over a Qt slot."""
+    """``NSTextField`` label over a Qt slot (``fill`` stretches it to the
+    slot's width so long text is never clipped)."""
 
-    def __init__(self, window, slot, text=''):
+    def __init__(self, window, slot, text='', fill=False):
+        self.fill = bool(fill)
         self.window = window
         self.slot = slot
         self.view = None
@@ -344,6 +369,7 @@ class NativeLabel:
                 field.setFont_(AppKit.NSFont.systemFontOfSize_(13.0))
                 field.sizeToFit()
                 self.view = field
+            self._natural = self.view.frame().size
             self._target = pe.as_target(self.window, self.slot, inset=1.0)
             if not pe.place_in(self.window, self._target, self.view):
                 return False
@@ -375,7 +401,13 @@ class NativeLabel:
 
     def place(self):
         if self.active and self.view is not None:
-            _place_centred(self.window, self.view, self._target)
+            if isinstance(self, NativeLabel) and self.fill:
+                _place_centred(self.window, self.view, self._target,
+                               align_left=False,
+                               natural=getattr(self, '_natural', None))
+            else:
+                _place_centred(self.window, self.view, self._target,
+                               natural=getattr(self, '_natural', None))
 
     def size(self):
         if self.view is None:

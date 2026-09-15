@@ -75,13 +75,32 @@ class MacApp:
 
         # extension popup + recursive switch, inside the group
         host = AppKit.NSView.alloc().init()
-        host.setFrame_(((0.0, 0.0), (100.0, 100.0)))
+        host.setFrame_(((0.0, 0.0), (100.0, 24.0)))
         group.addSubview_(host)
+        self.ext_host = host
         self.ext_popup = NativePopUpButton(
             None, ViewTarget(host), EXTENSIONS, '.tex',
             on_change=self._extension_changed,
             custom_label='其它')
         self.ext_popup.build()
+
+        def label(text):
+            field = AppKit.NSTextField.alloc().init()
+            field.setBezeled_(False)
+            field.setDrawsBackground_(False)
+            field.setEditable_(False)
+            field.setSelectable_(False)
+            field.setStringValue_(text)
+            field.setFont_(AppKit.NSFont.systemFontOfSize_(13.0))
+            field.sizeToFit()
+            group.addSubview_(field)
+            return field
+
+        self.ext_label = label('扩展名')
+        self.switch_label = label('含子目录')
+        self.group_separator = AppKit.NSBox.alloc().init()
+        self.group_separator.setBoxType_(AppKit.NSBoxSeparator)
+        group.addSubview_(self.group_separator)
 
         switch = AppKit.NSSwitch.alloc().init()
         switch.setControlSize_(AppKit.NSControlSizeRegular)
@@ -183,9 +202,17 @@ class MacApp:
 
         status_slot = AppKit.NSView.alloc().init()
         host.addSubview_(status_slot)
-        self.status = NativeLabel(None, ViewTarget(status_slot), '就绪')
+        self.status = NativeLabel(None, ViewTarget(status_slot), '就绪',
+                                  fill=True)
         self.status.build()
         self.status_host = status_slot
+
+    def _popup_size(self):
+        try:
+            size = self.ext_popup.view.frame().size
+            return (float(size.width), float(size.height))
+        except Exception:
+            return (120.0, 24.0)
 
     def _layout_children(self):
         """Lay out the children of the two hosts (called by the shell)."""
@@ -195,15 +222,27 @@ class MacApp:
             shell = self.shell
             sidebar = shell.sidebar_host.frame()
             # group box contents: label-less rows, popup right, switch right
-            if self.switch_host is not None:
-                group = self.shell.sidebar_group
-                gb = group.bounds()
-                self.switch_host.setFrame_(((10.0, gb.size.height - 34.0),
-                                            (gb.size.width - 20.0, 28.0)))
-                switch = self.switch.frame()
-                self.switch.setFrameOrigin_(
-                    (gb.size.width - 10.0 - switch.size.width,
-                     gb.size.height - 34.0 + (28.0 - switch.size.height) / 2))
+            group = self.shell.sidebar_group
+            gb = group.bounds()
+            row_h = 30.0
+            top_row_y = gb.size.height - row_h - 2.0
+            bottom_row_y = 2.0
+            self.group_separator.setFrame_(
+                ((10.0, bottom_row_y + row_h - 1.0),
+                 (gb.size.width - 20.0, 1.0)))
+            self.ext_label.setFrameOrigin_((12.0, top_row_y + 6.0))
+            self.switch_label.setFrameOrigin_((12.0, bottom_row_y + 7.0))
+            # extension popup (upper row, right aligned)
+            popup = self._popup_size()
+            self.ext_host.setFrame_(
+                ((gb.size.width - 12.0 - popup[0], top_row_y + 3.0),
+                 (popup[0], popup[1])))
+            self.ext_popup.place()
+            # recursive switch (lower row, right aligned)
+            switch = self.switch.frame()
+            self.switch.setFrameOrigin_(
+                (gb.size.width - 12.0 - switch.size.width,
+                 bottom_row_y + (row_h - switch.size.height) / 2.0))
 
             options = [c for _s, c in self.option_hosts]
             host = shell.content_host.bounds()

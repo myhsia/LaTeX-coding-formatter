@@ -212,11 +212,15 @@ class ViewTarget:
         self.inset = float(inset)
 
     def rect(self):
+        # a Cocoa rect: the placement code reads .origin/.size
+        import Foundation
+
         frame = self.view.frame()
         inset = self.inset
-        return ((frame.origin.x + inset, frame.origin.y + inset),
-                (max(0.0, frame.size.width - 2 * inset),
-                 max(0.0, frame.size.height - 2 * inset)))
+        return Foundation.NSMakeRect(
+            frame.origin.x + inset, frame.origin.y + inset,
+            max(0.0, frame.size.width - 2 * inset),
+            max(0.0, frame.size.height - 2 * inset))
 
     def visible(self):
         try:
