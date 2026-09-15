@@ -55,9 +55,15 @@ def _send(selector):
 
 
 def _qt_widget():
-    from PySide6.QtWidgets import QApplication
-
-    return QApplication.focusWidget()
+    """The focused Qt widget, or None (the native app has no Qt)."""
+    try:
+        from PySide6.QtWidgets import QApplication
+    except Exception:
+        return None
+    try:
+        return QApplication.focusWidget()
+    except Exception:
+        return None
 
 
 def _qt_can(name, read_only_ok=True):
