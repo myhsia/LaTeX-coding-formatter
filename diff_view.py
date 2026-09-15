@@ -60,6 +60,10 @@ class QtDiffViewAdapter:
     def place(self):
         pass
 
+    def build(self):
+        """Nothing to build: the Qt pane is always ready."""
+        return False
+
 
 class NativeDiffViewAdapter:
     """A real ``NSTextView``; the Qt pane stays as the geometry slot."""

@@ -123,6 +123,11 @@ class QtFileListAdapter:
     def place(self):
         pass
 
+    def build(self):
+        """Nothing to build: the Qt list is always ready (this is what
+        the native adapter's build() means for the other platforms)."""
+        return False
+
     # ---------- helpers ----------
     def _icon(self, path):
         entry = Path(path)
