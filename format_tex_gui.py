@@ -49,7 +49,8 @@ from platform_effects import (apply_effects, arrange_in_front,
                               has_native_switch, last_material_view,
                               last_sidebar_view, last_title_view,
                               lights_inset,
-                              footer_strip_view, has_native_plus_minus,
+                              footer_control_views, footer_strip_view,
+                              has_native_plus_minus,
                               native_plus_minus_height,
                               place_footer_strip,
                               place_native_plus_minus,
@@ -1387,10 +1388,17 @@ class MainWindow(QMainWindow):
             add_btn = self.btn_add
             remove_btn = self.btn_remove
             if has_native_plus_minus():
-                control = native_plus_minus_view()
                 strip = footer_strip_view()
+                add_glyph, sep, remove_glyph = footer_control_views()
                 images_ok = all(
-                    control.imageForSegment_(i) is not None for i in (0, 1))
+                    b is not None and b.image() is not None
+                    for b in (add_glyph, remove_glyph))
+                # no pill around the glyphs: accessory-bar style (default,
+                # plain at rest + hover highlight) or fully borderless
+                style_ok = (remove_glyph is not None
+                            and (not remove_glyph.isBordered()
+                                 or remove_glyph.bezelStyle()
+                                 == AppKit.NSBezelStyleAccessoryBarAction))
 
                 def theme_rect(widget, inset=0.0):
                     tl = widget.mapTo(self, QPoint(int(inset), int(inset)))
@@ -1407,24 +1415,34 @@ class MainWindow(QMainWindow):
                             and inner.origin.y + inner.size.height
                             <= outer.origin.y + outer.size.height + 0.5)
 
-                # the control must sit inside the strip, and the strip
-                # inside the frame's inner bottom band; re-check after a
-                # resize, because stale native rects are exactly the bug
-                # this guards against
-                contained = (inside(control.frame(), strip.frame())
-                             and inside(strip.frame(),
-                                        theme_rect(self.file_frame, 1.0)))
+                def group_fits():
+                    edges = theme_rect(self.file_frame, 1.0)
+                    return all(inside(v.frame(), strip.frame())
+                               for v in (add_glyph, sep, remove_glyph)) \
+                        and inside(strip.frame(), edges)
+
+                sep_ok = (sep is not None
+                          and abs(sep.frame().size.width - 1.0) < 0.5
+                          and add_glyph.frame().origin.x
+                          + add_glyph.frame().size.width
+                          <= sep.frame().origin.x + 0.5
+                          and sep.frame().origin.x + 1.0
+                          <= remove_glyph.frame().origin.x + 0.5)
+                # containment again after a resize: stale native rects are
+                # exactly the bug this guards against
+                contained = group_fits()
                 self.resize(self.width() + 40, self.height() + 30)
                 QApplication.processEvents()
-                contained = (contained
-                             and inside(control.frame(), strip.frame())
-                             and inside(strip.frame(),
-                                        theme_rect(self.file_frame, 1.0)))
-                small_ok = native_plus_minus_height() <= 22
-                buttons_ok = (control.segmentCount() == 2 and images_ok
-                              and strip is not None and contained and small_ok
+                contained = contained and group_fits()
+                small_ok = native_plus_minus_height() <= 26
+                buttons_ok = (images_ok and style_ok and sep_ok and contained
+                              and strip is not None and small_ok
                               and not self.btn_add.isVisible())
-                native_note = 'native NSSegmentedControl + footer strip'
+                native_note = ('native glyph group ({:.0f} pt) on the '
+                               'full-width strip, contained, separator '
+                               '{:.0f} pt'.format(
+                                   native_plus_minus_height(),
+                                   sep.frame().size.width))
             else:
                 buttons_ok = (add_btn.isEnabled()
                               and 'listadd' == add_btn.objectName()
