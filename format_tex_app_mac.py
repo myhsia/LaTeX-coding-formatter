@@ -31,7 +31,7 @@ from native_mac.drop import make_drop_view  # noqa: E402
 from native_mac.filelist import NativeFileList  # noqa: E402
 from native_mac.shell import (BAND_HEIGHT, FOOTER_HEIGHT,  # noqa: E402
                               NativeShell)
-from platform_effects import ViewTarget  # noqa: E402
+from platform_effects import ViewTarget, lights_inset  # noqa: E402
 
 EXTENSIONS = ['*.tex', '*.ctx', '*.sty', '*.cls', '*.dtx', '*.txt']
 ENCODINGS = ['同输入', 'utf-8', 'utf-8-sig', 'gb2312', 'gbk', 'big5',
@@ -664,6 +664,32 @@ def run_self_test(app):
         ok = ok and (app.plus_minus.segmentCount() == 2
                      and app.plus_minus.segmentStyle()
                      == AppKit.NSSegmentStyleSmallSquare)
+
+        # titlebar chrome (traffic lights + title) centred in the band
+        app.shell.layout()
+        win = app.shell.window
+        frame = win.frame()
+        top = frame.origin.y + frame.size.height
+
+        def centre_from_top(view):
+            rect = view.convertRect_toView_(view.bounds(), None)
+            rect = win.convertRectToScreen_(rect)
+            return top - (rect.origin.y + rect.size.height / 2.0)
+
+        close = win.standardWindowButton_(AppKit.NSWindowCloseButton)
+        lights_ok = abs(centre_from_top(close) - BAND_HEIGHT / 2.0) < 1.5
+        rect = close.convertRect_toView_(close.bounds(), None)
+        rect = win.convertRectToScreen_(rect)
+        inset_ok = abs((rect.origin.x - frame.origin.x)
+                       - lights_inset()) < 1.5
+        title = win.toolbarTitlebarTitleTextField()
+        title_ok = (title is not None
+                    and abs(centre_from_top(title) - BAND_HEIGHT / 2.0) < 1.5)
+        chrome_ok = lights_ok and inset_ok and title_ok
+        lines.append('titlebar chrome centred (lights y {}, left inset {}, '
+                     'title y {}): {}'.format(lights_ok, inset_ok, title_ok,
+                                              chrome_ok))
+        ok = ok and chrome_ok
 
         # --- interactive regressions -------------------------------------
         # every native control's action must be implemented by its target,

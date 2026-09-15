@@ -987,50 +987,69 @@ def _place_sidebar(nswin, theme):
                              (_SIDEBAR_WIDTH, bounds.size.height)))
 
 
+def center_titlebar_in_band(window, band):
+    """Centre the native titlebar container vertically in the top band.
+
+    The traffic lights live in ``NSTitlebarView`` (and, in the native app,
+    so does the window title), so moving that container 1:1 with the
+    measured offset centres both. Re-running is a no-op once centred."""
+    import AppKit
+
+    close = window.standardWindowButton_(AppKit.NSWindowCloseButton)
+    if close is None:
+        return
+    frame = window.frame()
+    top = frame.origin.y + frame.size.height
+    rect = close.convertRect_toView_(close.bounds(), None)
+    rect = window.convertRectToScreen_(rect)
+    current = top - (rect.origin.y + rect.size.height / 2.0)
+    delta_y = current - band / 2.0
+    if abs(delta_y) < 0.5:
+        return
+    box = close.superview()
+    bf = box.frame()
+    flipped = bool(box.superview().isFlipped())
+    box.setFrameOrigin_((bf.origin.x,
+                         bf.origin.y + (-delta_y if flipped else delta_y)))
+
+
+def inset_traffic_lights(window, inset):
+    """Move the three standard window buttons so the close button's left
+    edge sits ``inset`` points from the window's left edge (Finder uses a
+    wider unified-toolbar inset than AppKit's default)."""
+    import AppKit
+
+    close = window.standardWindowButton_(AppKit.NSWindowCloseButton)
+    if close is None:
+        return
+    left = window.frame().origin.x
+    rect = close.convertRect_toView_(close.bounds(), None)
+    rect = window.convertRectToScreen_(rect)
+    delta_x = inset - (rect.origin.x - left)
+    if abs(delta_x) < 0.5:
+        return
+    for kind in (AppKit.NSWindowCloseButton,
+                 AppKit.NSWindowMiniaturizeButton,
+                 AppKit.NSWindowZoomButton):
+        button = window.standardWindowButton_(kind)
+        if button is None:
+            continue
+        bf = button.frame()
+        button.setFrameOrigin_((bf.origin.x + delta_x, bf.origin.y))
+
+
 def _align_titlebar(nswin):
-    """Centre the native titlebar container in the band, give the traffic
-    lights the native left inset and left-align the window title just
-    after them.
+    """Centre the native titlebar chrome (traffic lights + title) in the
+    band, give the traffic lights the native left inset and left-align the
+    window title just past the sidebar.
 
     AppKit resets the chrome on layout, so instead of storing a baseline
     we correct from the measured offsets - each correction moves the
     chrome 1:1, so one step is exact and re-running is a no-op."""
     import AppKit
 
-    close = nswin.standardWindowButton_(AppKit.NSWindowCloseButton)
-    if close is None:
-        return
-    frame = nswin.frame()
-    top = frame.origin.y + frame.size.height
-    left = frame.origin.x
-
-    def screen_rect(view):
-        rect = view.convertRect_toView_(view.bounds(), None)
-        return nswin.convertRectToScreen_(rect)
-
-    # vertical: centre the container in the band
-    rect = screen_rect(close)
-    current = top - (rect.origin.y + rect.size.height / 2)
-    delta_y = current - BAND_HEIGHT / 2.0
-    if abs(delta_y) >= 0.5:
-        box = close.superview()
-        bf = box.frame()
-        flipped = bool(box.superview().isFlipped())
-        box.setFrameOrigin_((bf.origin.x,
-                             bf.origin.y + (-delta_y if flipped else delta_y)))
-
-    # horizontal: inset the three buttons natively
-    rect = screen_rect(close)
-    delta_x = lights_inset() - (rect.origin.x - left)
-    if abs(delta_x) >= 0.5:
-        for kind in (AppKit.NSWindowCloseButton,
-                     AppKit.NSWindowMiniaturizeButton,
-                     AppKit.NSWindowZoomButton):
-            button = nswin.standardWindowButton_(kind)
-            if button is None:
-                continue
-            bf = button.frame()
-            button.setFrameOrigin_((bf.origin.x + delta_x, bf.origin.y))
+    center_titlebar_in_band(nswin, BAND_HEIGHT)
+    inset_traffic_lights(nswin, lights_inset())
 
     # title: our own label, left-aligned just right of the sidebar
     # boundary (falling back to just after the traffic lights when there
@@ -1041,14 +1060,18 @@ def _align_titlebar(nswin):
     if title is None:
         return
     _style_title(AppKit, nswin, title)
+    frame = nswin.frame()
+    left = frame.origin.x
+    top = frame.origin.y + frame.size.height
     if _SIDEBAR_WIDTH > 0:
         target = left + _SIDEBAR_WIDTH + title_gap()
     else:
         zoom = nswin.standardWindowButton_(AppKit.NSWindowZoomButton)
         if zoom is None:
             return
-        zoom_rect = screen_rect(zoom)
-        target = zoom_rect.origin.x + zoom_rect.size.width + title_gap()
+        rect = zoom.convertRect_toView_(zoom.bounds(), None)
+        rect = nswin.convertRectToScreen_(rect)
+        target = rect.origin.x + rect.size.width + title_gap()
     title.sizeToFit()
     size = title.frame().size
     # vertical: centre the label on the band, like the traffic lights

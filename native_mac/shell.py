@@ -21,6 +21,9 @@ the Qt app produced, now without Qt. Callers host their own views inside
 
 import sys
 
+from platform_effects import (band_height, center_titlebar_in_band,
+                              inset_traffic_lights, lights_inset, title_gap)
+
 BAND_HEIGHT = 52.0
 FOOTER_HEIGHT = 24.0
 SIDEBAR_WIDTH = 240.0
@@ -144,6 +147,11 @@ class NativeShell:
             self.sidebar_host, self.content_host = sidebar_host, panel_host
             self.footer_host, self.footer_separator = footer, separator
             self.toolbar_host = band
+            # AppKit resets the titlebar chrome on resize/activation/full
+            # screen, so re-centre it from the window delegate
+            self._delegate = _window_delegate_class().alloc().init()
+            self._delegate.owner = self
+            window.setDelegate_(self._delegate)
             self.layout()
             return True
         except Exception as exc:
@@ -206,12 +214,34 @@ class NativeShell:
             ((12.0, 12.0), (max(1.0, panel_width - 24.0),
                             max(1.0, height - BAND_HEIGHT - 24.0))))
 
-        self._align_title(sidebar_width)
+        self._align_chrome(sidebar_width)
         if callable(self.on_layout):
             self.on_layout()
 
+    def _align_chrome(self, sidebar_width):
+        """Centre the AppKit titlebar chrome (traffic lights + title) in
+        the top band, inset the traffic lights like Finder and left-align
+        the title past the sidebar. In full screen macOS hides the
+        titlebar, so the band is hidden and nothing is centred."""
+        try:
+            import AppKit
+
+            if self.window.styleMask() & AppKit.NSWindowStyleMaskFullScreen:
+                if self.band is not None:
+                    self.band.setHidden_(True)
+                return
+            if self.band is not None:
+                self.band.setHidden_(False)
+            band = band_height() or BAND_HEIGHT
+            center_titlebar_in_band(self.window, band)
+            inset_traffic_lights(self.window, lights_inset())
+            self._align_title(sidebar_width)
+        except Exception:
+            pass
+
     def _align_title(self, sidebar_width):
-        """Left-align the window title just right of the sidebar."""
+        """Left-align the window title just right of the sidebar (its
+        vertical position follows the centred titlebar container)."""
         try:
             title = self.window.toolbarTitlebarTitleTextField()
             if title is None:
@@ -220,7 +250,7 @@ class NativeShell:
             left = frame.origin.x
             rect = title.convertRect_toView_(title.bounds(), None)
             screen = self.window.convertRectToScreen_(rect)
-            target = left + sidebar_width + 8.0
+            target = left + sidebar_width + title_gap()
             delta = target - screen.origin.x
             if abs(delta) >= 0.5:
                 tf = title.frame()
@@ -253,3 +283,39 @@ class NativeShell:
             pe._note(message)
         except Exception:
             pass
+
+
+_WINDOW_DELEGATE_CLASS = None
+
+
+def _window_delegate_class():
+    """``NSWindowDelegate`` that re-lays the window out when AppKit resets
+    the titlebar chrome (resize / activation / full screen)."""
+    global _WINDOW_DELEGATE_CLASS
+    if _WINDOW_DELEGATE_CLASS is None:
+        from AppKit import NSObject
+
+        class _WindowDelegate(NSObject):
+            def windowDidResize_(self, notification):
+                _relayout_owner(self)
+
+            def windowDidBecomeKey_(self, notification):
+                _relayout_owner(self)
+
+            def windowDidResignKey_(self, notification):
+                _relayout_owner(self)
+
+            def windowDidEnterFullScreen_(self, notification):
+                _relayout_owner(self)
+
+            def windowDidExitFullScreen_(self, notification):
+                _relayout_owner(self)
+
+        _WINDOW_DELEGATE_CLASS = _WindowDelegate
+    return _WINDOW_DELEGATE_CLASS
+
+
+def _relayout_owner(delegate):
+    owner = getattr(delegate, 'owner', None)
+    if owner is not None:
+        owner.layout()
