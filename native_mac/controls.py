@@ -26,20 +26,24 @@ def _target_class():
         from AppKit import NSObject
 
         class _ControlTarget(NSObject):
-            def _toggled_native(self, sender):
+            # the method names must match the selectors set as the actions
+            # (toggled:/changed:/clicked:) - pyobjc exposes a trailing
+            # underscore as the colon, so ``_toggled_native`` would NOT be
+            # found and AppKit would auto-disable the popup menu items
+            def toggled_(self, sender):
                 owner = getattr(self, 'owner', None)
                 if owner is not None:
-                    owner._toggled_native(sender)
+                    owner.toggled_(sender)
 
-            def _changed_native(self, sender):
+            def changed_(self, sender):
                 owner = getattr(self, 'owner', None)
                 if owner is not None:
-                    owner._changed_native(sender)
+                    owner.changed_(sender)
 
-            def _clicked_native(self):
+            def clicked_(self, sender):
                 owner = getattr(self, 'owner', None)
                 if owner is not None:
-                    owner._clicked_native()
+                    owner.clicked_(sender)
 
         _TARGET_CLASS = _ControlTarget
     return _TARGET_CLASS
@@ -100,8 +104,11 @@ class NativeCheckbox:
                 button.setState_(AppKit.NSControlStateValueOn
                                  if self._checked
                                  else AppKit.NSControlStateValueOff)
-                self._target = _make_target(self)
-                button.setTarget_(self._target)
+                # keep a strong Python reference: NSControl's target is
+                # weak, so without this the ObjC target is deallocated and
+                # the action (and menu validation) silently dies
+                self._control_target = _make_target(self)
+                button.setTarget_(self._control_target)
                 button.setAction_(b'toggled:')
                 button.sizeToFit()
                 self.view = button
@@ -192,8 +199,11 @@ class NativePopUpButton:
                 if self.custom_label and self.custom_label not in titles:
                     titles.append(self.custom_label)
                 popup.addItemsWithTitles_(titles)
-                self._target = _make_target(self)
-                popup.setTarget_(self._target)
+                # the items carry no per-item validation: keep them enabled
+                # regardless of the target's validation (belt and braces)
+                popup.menu().setAutoenablesItems_(False)
+                self._control_target = _make_target(self)
+                popup.setTarget_(self._control_target)
                 popup.setAction_(b'changed:')
                 if self._current in titles:
                     popup.selectItemWithTitle_(self._current)
@@ -284,8 +294,11 @@ class NativePushButton:
                 button = AppKit.NSButton.alloc().init()
                 button.setTitle_(self._title)
                 button.setBezelStyle_(AppKit.NSBezelStyleRounded)
-                self._target = _make_target(self)
-                button.setTarget_(self._target)
+                # keep a strong Python reference: NSControl's target is
+                # weak, so without this the ObjC target is deallocated and
+                # the action (and menu validation) silently dies
+                self._control_target = _make_target(self)
+                button.setTarget_(self._control_target)
                 button.setAction_(b'clicked:')
                 button.sizeToFit()
                 self.view = button

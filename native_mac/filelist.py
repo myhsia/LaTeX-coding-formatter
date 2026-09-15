@@ -21,6 +21,8 @@ Usage
 import sys
 from pathlib import Path
 
+from native_mac.drop import pasteboard_paths
+
 
 class NativeFileList:
     """``NSTableView``-backed file list (macOS only; ``available()`` False
@@ -290,37 +292,18 @@ def _make_table_source():
         # --- Finder drag & drop (current API: public.file-url) ---
         def tableView_validateDrop_proposedRow_proposedDropOperation_(
                 self, table, info, row, operation):
-            if _pasteboard_paths(info.draggingPasteboard()):
+            if pasteboard_paths(info.draggingPasteboard()):
                 info.setDropOperation_(AppKit.NSTableViewDropOn)
                 return AppKit.NSDragOperationCopy
             return AppKit.NSDragOperationNone
 
         def tableView_acceptDrop_row_dropOperation_(
                 self, table, info, row, operation):
-            paths = _pasteboard_paths(info.draggingPasteboard())
+            paths = pasteboard_paths(info.draggingPasteboard())
             self.owner._dropped(paths)
             return AppKit.NSDragOperationCopy
 
     return _TableSourceImpl
-
-
-def _pasteboard_paths(pasteboard):
-    """File paths from a dragging pasteboard (no deprecated APIs)."""
-    import AppKit
-    import Foundation
-
-    paths = []
-    for item in pasteboard.pasteboardItems() or []:
-        url_string = item.stringForType_(AppKit.NSPasteboardTypeFileURL)
-        if not url_string:
-            continue
-        url = Foundation.NSURL.URLWithString_(url_string)
-        if url is None:
-            continue
-        path = url.path()
-        if path:
-            paths.append(str(path))
-    return paths
 
 
 _ROW_VIEW_CLASS = None

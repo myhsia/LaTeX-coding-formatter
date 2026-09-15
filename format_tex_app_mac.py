@@ -27,6 +27,7 @@ from native_mac import menus  # noqa: E402
 from native_mac.controls import (NativeCheckbox, NativeLabel,  # noqa: E402
                                  NativePopUpButton, NativePushButton)
 from native_mac.diffview import NativeDiffView  # noqa: E402
+from native_mac.drop import make_drop_view  # noqa: E402
 from native_mac.filelist import NativeFileList  # noqa: E402
 from native_mac.shell import (BAND_HEIGHT, FOOTER_HEIGHT,  # noqa: E402
                               NativeShell)
@@ -122,8 +123,12 @@ class MacApp:
         self.switch = switch
         self.switch_host = host
 
-        # empty-state hint (the Qt app's placeholder: text + two links)
-        hint_host = AppKit.NSView.alloc().init()
+        # empty-state hint (the Qt app's placeholder: text + two links);
+        # the host doubles as a drop target while the list is empty (the
+        # NSTableView is hidden then, so it cannot receive the drop)
+        hint_host = make_drop_view(self.add_paths)
+        if hint_host is None:
+            hint_host = AppKit.NSView.alloc().init()
         shell.sidebar_host.addSubview_(hint_host)
         hint = AppKit.NSTextField.alloc().init()
         hint.setBezeled_(False)
@@ -144,6 +149,7 @@ class MacApp:
             button.setBordered_(False)
             button.setFont_(AppKit.NSFont.systemFontOfSize_(13.0))
             button.setTarget_(self._link_target())
+            button.setAction_(b'clicked:')
             button.setTag_(len(links))
             button.sizeToFit()
             hint_host.addSubview_(button)
@@ -478,7 +484,9 @@ class MacApp:
         panel = AppKit.NSOpenPanel.openPanel()
         panel.setAllowsMultipleSelection_(True)
         panel.setCanChooseDirectories_(False)
-        if panel.runModal() != 1000:
+        # NSOpenPanel returns NSModalResponseOK (1), NOT the NSAlert value
+        # 1000 - comparing to 1000 silently discarded every selection
+        if panel.runModal() != AppKit.NSModalResponseOK:
             return
         self.add_paths([str(url.path()) for url in panel.URLs()])
 
@@ -488,7 +496,7 @@ class MacApp:
         panel = AppKit.NSOpenPanel.openPanel()
         panel.setCanChooseDirectories_(True)
         panel.setCanChooseFiles_(False)
-        if panel.runModal() != 1000:
+        if panel.runModal() != AppKit.NSModalResponseOK:
             return
         self.add_paths([str(url.path()) for url in panel.URLs()])
 
@@ -559,6 +567,45 @@ _PlusMinusTarget = None
 _keep_alive = []
 
 
+_DropInfoClass = None
+
+
+def _drop_info_class():
+    """A minimal ``NSDraggingInfo`` stand-in for the self-test (an ObjC
+    object so pyobjc can pass it to the drag callbacks)."""
+    global _DropInfoClass
+    if _DropInfoClass is None:
+        from AppKit import NSObject
+
+        class _DropInfo(NSObject):
+            def draggingPasteboard(self):
+                return self._pasteboard
+
+            def setDropOperation_(self, operation):
+                self._operation = operation
+
+        _DropInfoClass = _DropInfo
+    return _DropInfoClass
+
+
+def _drop_info(paths):
+    """An NSDraggingInfo-like object carrying a synthetic file pasteboard."""
+    import AppKit
+    import Foundation
+
+    pasteboard = AppKit.NSPasteboard.pasteboardWithName_(
+        'com.latexformatter.selftest')
+    pasteboard.clearContents()
+    pasteboard.declareTypes_owner_([AppKit.NSPasteboardTypeFileURL], None)
+    for path in paths[:1]:      # one item per synthetic pasteboard
+        url = Foundation.NSURL.fileURLWithPath_(str(path))
+        pasteboard.setString_forType_(url.absoluteString(),
+                                      AppKit.NSPasteboardTypeFileURL)
+    info = _drop_info_class().alloc().init()
+    info._pasteboard = pasteboard
+    return info
+
+
 def _pump(AppKit, seconds=0.1):
     """Run the run loop briefly (NSApplication.run() would block)."""
     try:
@@ -617,6 +664,91 @@ def run_self_test(app):
         ok = ok and (app.plus_minus.segmentCount() == 2
                      and app.plus_minus.segmentStyle()
                      == AppKit.NSSegmentStyleSmallSquare)
+
+        # --- interactive regressions -------------------------------------
+        # every native control's action must be implemented by its target,
+        # or AppKit auto-disables it (gray popup menus / dead buttons)
+        controls = [c.view for _slot, c in app.option_hosts]
+        controls += [app.ext_popup.view, app.enc_popup.view,
+                     app.apply_button.view]
+        actions_ok = all(
+            view.target() is not None and bool(view.action())
+            and bool(view.target().respondsToSelector_(view.action()))
+            for view in controls)
+        lines.append('native control actions implemented by their target: '
+                     '{}'.format(actions_ok))
+        ok = ok and actions_ok
+
+        # the extension popup's items must be enabled (regression: gray)
+        popup = app.ext_popup.view
+        popup.menu().update()
+        items = popup.menu().itemArray()
+        enabled_ok = all(bool(item.isEnabled()) for item in items)
+        lines.append('extension popup items enabled ({}): {}'.format(
+            len(items), enabled_ok))
+        ok = ok and enabled_ok
+
+        # ... and selecting one must fire on_change
+        seen = []
+        original_change = app.ext_popup.on_change
+        app.ext_popup.on_change = seen.append
+        popup.selectItemAtIndex_(1)
+        AppKit.NSApp().sendAction_to_from_(
+            popup.action(), popup.target(), popup)
+        app.ext_popup.on_change = original_change
+        fired_ok = seen == [popup.itemTitleAtIndex_(1)]
+        popup.selectItemWithTitle_('.tex')
+        lines.append('extension popup selection fires on_change: {}'.format(
+            fired_ok))
+        ok = ok and fired_ok
+
+        # a native checkbox click toggles the control
+        probe = app.option_controls['check']
+        before = bool(probe.isChecked())
+        probe.view.performClick_(None)
+        toggle_ok = bool(probe.isChecked()) != before
+        probe.setChecked(before)
+        lines.append('native checkbox click toggles: {}'.format(toggle_ok))
+        ok = ok and toggle_ok
+
+        # the empty-state links must carry an action the target implements
+        links_ok = all(
+            button.target() is not None and bool(button.action())
+            and bool(button.target().respondsToSelector_(button.action()))
+            for button in app.hint_links)
+        lines.append('empty-state links wired: {}'.format(links_ok))
+        ok = ok and links_ok
+
+        # dropping onto the empty list (the hint host) adds the file
+        drop_host = app.hint_host
+        registered = bool(AppKit.NSPasteboardTypeFileURL
+                          in (drop_host.registeredDraggedTypes() or []))
+        dropped_empty = tmp / 'dropped_empty.tex'
+        dropped_empty.write_text('中文English中文\n', encoding='utf-8')
+        before = app.list.count()
+        accepted = bool(drop_host.performDragOperation_(
+            _drop_info([dropped_empty])))
+        empty_drop_ok = accepted and app.list.count() == before + 1
+        lines.append('empty-state drop target registered {} + adds the '
+                     'file: {}'.format(registered, empty_drop_ok))
+        ok = ok and registered and empty_drop_ok
+
+        # ... and dropping onto the populated list (the table) adds it too
+        dropped_table = tmp / 'dropped_table.tex'
+        dropped_table.write_text('中文English中文\n', encoding='utf-8')
+        source = app.list._datasource
+        info = _drop_info([dropped_table])
+        operation = source \
+            .tableView_validateDrop_proposedRow_proposedDropOperation_(
+                app.list._table, info, -1, 0)
+        before = app.list.count()
+        source.tableView_acceptDrop_row_dropOperation_(
+            app.list._table, info, -1, operation)
+        table_drop_ok = (operation == AppKit.NSDragOperationCopy
+                         and app.list.count() == before + 1)
+        lines.append('populated-list drop adds the file: {}'.format(
+            table_drop_ok))
+        ok = ok and table_drop_ok
     except Exception:
         lines.append('self-test exception: {}'.format(
             traceback.format_exc()))

@@ -2101,6 +2101,23 @@ class MainWindow(QMainWindow):
                 ok = ok and all(wr.native is None or not wr.native.active
                                 for wr in wrappers)
 
+            # every native control's action must be implemented by its
+            # (retained) target, or AppKit silently disables the popup
+            # menus and the buttons do nothing (a weak-target regression)
+            native_views = [wr.native.view for wr in wrappers
+                            if wr.native is not None and wr.native.active]
+            for wrapper in (self.ext_edit, self.enc_out, self.btn_apply):
+                if wrapper.native is not None and wrapper.native.active:
+                    native_views.append(wrapper.native.view)
+            actions_ok = all(
+                view.target() is not None and bool(view.action())
+                and bool(view.target().respondsToSelector_(view.action()))
+                for view in native_views)
+            lines.append('native control actions implemented by their '
+                         'target ({}): {}'.format(len(native_views),
+                                                  actions_ok))
+            ok = ok and actions_ok
+
             # option checkboxes: no heading, reflow 2x3 <-> 3x2 by
             # width, equally wide columns spread across the panel
             def option_layout():
