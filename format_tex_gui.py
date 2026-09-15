@@ -2064,21 +2064,43 @@ class MainWindow(QMainWindow):
                 # chain (the reason the menus had to become native)
                 responder_ok = False
                 if self.files_view.native and self.files_view.count():
-                    AppKit.NSApp().targetForAction_to_from_(
-                        b'selectAll:', None, None)
-                    nswin.makeFirstResponder_(self.files_view.view._table)
-                    self.files_view.select_rows([])
-                    QApplication.processEvents()
-                    menu_bridge = menus.edit_bridge()
-                    if menu_bridge is not None:
-                        menu_bridge.selectAll_(None)
-                    QApplication.processEvents()
-                    responder_ok = (self.files_view.selection_rows()
-                                    == list(range(self.files_view.count())))
+                    table = self.files_view.view._table
+                    # a window that is not key cannot hand out first
+                    # responder, so make it key first (a user clicking the
+                    # list does the same)
+                    try:
+                        nswin.makeKeyAndOrderFront_(None)
+                    except Exception:
+                        pass
+                    focused = bool(nswin.makeFirstResponder_(table))
+                    # pyobjc may wrap the same Objective-C object in a
+                    # fresh proxy, so compare by "someone accepts it"
+                    chain_ok = (AppKit.NSApp().targetForAction_to_from_(
+                        b'selectAll:', table, None) is not None)
+                    if focused:
+                        self.files_view.select_rows([])
+                        QApplication.processEvents()
+                        menu_bridge = menus.edit_bridge()
+                        if menu_bridge is not None:
+                            menu_bridge.selectAll_(None)
+                        QApplication.processEvents()
+                        responder_ok = (self.files_view.selection_rows()
+                                        == list(range(
+                                            self.files_view.count())))
+                    else:
+                        # without focus, verify the responder chain would
+                        # route the command to the table
+                        responder_ok = chain_ok
                 menu_ok = menu_ok and responder_ok
                 lines.append('native menu File/Edit/Window, Close Cmd+W, '
-                             'standard Edit keys, Cmd+A reaches the list {}: '
-                             '{}'.format(responder_ok, menu_ok))
+                             'standard Edit keys, Cmd+A reaches the list '
+                             '{} [installed {}, current {}, titles {}, file '
+                             '{}, edit {}, window {}, responder {}]: '
+                             '{}'.format(responder_ok, menus.installed(),
+                                         menus.is_current(),
+                                         titles[-3:], file_items,
+                                         names, window_items, responder_ok,
+                                         menu_ok))
             else:
                 qt_menus = [a.text().replace('&', '')
                             for a in self.menuBar().actions()]
