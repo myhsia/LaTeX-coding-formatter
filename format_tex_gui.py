@@ -9,7 +9,8 @@ Windows Mica (see platform_effects.py).
 
 Usage
 -----
-    python3 format_tex_gui.py
+    python3 format_tex_gui.py142857
+    
 """
 
 import difflib
@@ -38,6 +39,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
 
 from format_tex import (FormatOptions, backup_path, format_file,
                         make_backup, scan_directory)
+from filelist_view import create_file_list_view
 from native_menu import (CUSTOM_SENTINEL, build_menu, menu_entries,
                          popup_native_menu)
 from platform_effects import (apply_effects, arrange_in_front,
@@ -441,8 +443,8 @@ class MainWindow(QMainWindow):
         self.file_list.setStyleSheet(
             'QListWidget { background: transparent; }')
         self.file_list.viewport().setAutoFillBackground(False)
-        self.file_list.itemSelectionChanged.connect(self._preview_selection)
-        self.file_list.itemSelectionChanged.connect(self._sync_list_buttons)
+        self.file_list.itemSelectionChanged.connect(
+            self._on_list_selection)
 
         frame = QFrame()
         frame.setObjectName('fileframe')
@@ -600,6 +602,11 @@ class MainWindow(QMainWindow):
         self._notes_seen = 0
         prepare_qt(self)
         self._reflow_options()
+        # real NSTableView on macOS (the Qt list stays as the empty-state
+        # host); the Qt list itself everywhere else. Created here, once
+        # _effects_applied exists: inserting a native subview fires Qt
+        # window events.
+        self.files_view = create_file_list_view(self)
         # menus last: creating the menu bar triggers window events
         self._build_menus()
 
@@ -622,7 +629,7 @@ class MainWindow(QMainWindow):
     def _splitter_moved(self, *_args):
         self._sync_sidebar_width()
         self._reflow_options()
-        reposition_materials(self)
+        self._reapply_materials()
 
     def _reflow_options(self):
         """Lay the option checkboxes out as 2 rows x 3 columns or
@@ -794,7 +801,7 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         self._sync_sidebar_width()
         self._reflow_options()
-        reposition_materials(self)
+        self._reapply_materials()
 
     def changeEvent(self, event):
         super().changeEvent(event)
@@ -808,13 +815,14 @@ class MainWindow(QMainWindow):
                 12, top + 12, 12, 12)
             self._sync_sidebar_width()
             self._reflow_options()
-            reposition_materials(self)
+            self._reapply_materials()
 
     def apply_window_effects(self):
         self.effect_note = apply_effects(self, self.dark)
         self._effects_applied = True
         self._setup_native_switch()
         self._setup_native_plus_minus()
+        self.files_view.build()
         if debug_enabled():
             # FORMAT_TEX_DEBUG=1: outline the content surface too
             self.content_panel.setStyleSheet(
@@ -835,6 +843,8 @@ class MainWindow(QMainWindow):
     def _reapply_materials(self):
         self._sync_sidebar_width()
         reposition_materials(self)
+        if hasattr(self, 'files_view'):
+            self.files_view.place()
 
     def _setup_native_switch(self):
         """Use a real NSSwitch for 含子目录; fall back to the Qt
@@ -1273,26 +1283,21 @@ class MainWindow(QMainWindow):
             (drop_dir / 'drop2.ctx').write_text('y\n', encoding='utf-8')
             loose = drop_dir / 'drop3.tex'
             loose.write_text('z\n', encoding='utf-8')
-            before = self.file_list.count()
-            mime = QMimeData()
-            mime.setUrls([QUrl.fromLocalFile(str(drop_dir)),
-                          QUrl.fromLocalFile(str(loose))])
-            event = QDropEvent(QPointF(5, 5), Qt.DropAction.CopyAction,
-                               mime, Qt.MouseButton.LeftButton,
-                               Qt.KeyboardModifier.NoModifier)
-            self.file_list.dropEvent(event)
-            gained = self.file_list.count() - before
-            lines.append('drop added files: {} (folder scan '
-                         '+ loose file)'.format(gained))
-            placeholder_hidden = not placeholder.isVisible()
+            before = self.files_view.count()
+            self.drop_paths([str(drop_dir), str(loose)])
+            QApplication.processEvents()
+            gained = self.files_view.count() - before
+            lines.append('drop added files: {} (folder scan + loose file)'
+                         .format(gained))
+            placeholder_hidden = not (
+                self.file_list.placeholder_widget().isVisible())
             lines.append('placeholder hidden after files: {}'.format(
                 placeholder_hidden))
             ok = ok and gained >= 2 and placeholder_hidden
-            # dropped files remember the folder they were scanned from,
-            # so backups can mirror it under <root>/backup
+            # every row remembers the folder it was scanned from
             roots_ok = all(
-                self.file_list.item(i).data(ROLE_ROOT) == str(drop_dir)
-                for i in range(self.file_list.count()))
+                root == str(drop_dir)
+                for _path, root in self.files_view.entries())
             lines.append('dropped files remember their scanned root: {}'
                          .format(roots_ok))
             ok = ok and roots_ok
@@ -1326,53 +1331,82 @@ class MainWindow(QMainWindow):
             f2 = seltmp / 'two.tex'
             f1.write_text('中文English中文\n', encoding='utf-8')
             f2.write_text('中文English中文\n', encoding='utf-8')
-            self.file_list.clear()
-            self.file_list.clearSelection()
+            self.files_view.clear()
             self._add_paths([(str(f1), str(seltmp)),
                              (str(f2), str(seltmp))])
             QApplication.processEvents()
-            mode_ok = (self.file_list.selectionMode()
-                       == QAbstractItemView.SelectionMode.ExtendedSelection)
+            if self.files_view.native:
+                table = self.files_view.view._table
+                multi_ok = bool(table.allowsMultipleSelection())
+                model_ok = (self.files_view.count() == 2
+                            and table.numberOfRows() == 2)
+                style_ok = (table.style() == AppKit.NSTableViewStylePlain
+                            and table.gridStyleMask()
+                            == AppKit.NSTableViewSolidHorizontalGridLineMask
+                            and table.selectionHighlightStyle()
+                            == AppKit.NSTableViewSelectionHighlightStyleRegular)
+                cell = self.files_view.view.cell_view(1)
+                cell_ok = (cell is not None
+                           and cell.imageView() is not None
+                           and cell.imageView().image() is not None
+                           and cell.textField() is not None
+                           and cell.textField().stringValue() == 'two.tex'
+                           and cell.textField().toolTip() == str(f2))
+                # the table must stay inside the frame (before and after
+                # a resize) - stale native rects are the bug class here
+                def inside(inner, outer):
+                    return (inner.origin.x >= outer.origin.x - 0.5
+                            and inner.origin.y >= outer.origin.y - 0.5
+                            and inner.origin.x + inner.size.width
+                            <= outer.origin.x + outer.size.width + 0.5
+                            and inner.origin.y + inner.size.height
+                            <= outer.origin.y + outer.size.height + 0.5)
+
+                def list_fits():
+                    slot = self.file_list
+                    tl = slot.mapTo(self, QPoint(1, 1))
+                    rect = ((float(tl.x()), float(tl.y())),
+                            (float(slot.width() - 2), float(slot.height() - 2)))
+                    return inside(self.files_view.view._scroll.frame(),
+                                  qt_view.convertRect_toView_(rect, theme))
+
+                fits_ok = list_fits()
+                self.resize(self.width() + 40, self.height() + 30)
+                QApplication.processEvents()
+                fits_ok = fits_ok and list_fits()
+                adapter_ok = (multi_ok and model_ok and style_ok and cell_ok
+                              and fits_ok)
+                lines.append(
+                    'native file list: NSTableView rows {} == model {}, '
+                    'plain style + solid grid + regular highlight {}, '
+                    'multi-select {}, native cell (icon/name/tooltip) {}, '
+                    'inside the frame (also after resize) {}: {}'.format(
+                        table.numberOfRows(), self.files_view.count(),
+                        style_ok, multi_ok, cell_ok, fits_ok, adapter_ok))
+            else:
+                adapter_ok = (self.file_list.selectionMode()
+                              == QAbstractItemView.SelectionMode
+                              .ExtendedSelection
+                              and self.files_view.count() == 2)
             button_ok = (not hasattr(self, 'btn_preview')
                          and hasattr(self, 'btn_apply'))
-            # select only the second item: only its diff is shown
-            self.file_list.clearSelection()
-            self.file_list.item(1).setSelected(True)
+            # selecting only the second row previews only that file
+            self.files_view.clear()
+            self._add_paths([(str(f1), str(seltmp)), (str(f2), str(seltmp))])
+            QApplication.processEvents()
+            self.files_view.select_index(1)
             QApplication.processEvents()
             only_second = (str(f2) in self.output.toPlainText()
                            and str(f1) not in self.output.toPlainText())
-            # selecting both shows both (Cmd/Shift-style multi-select)
-            self.file_list.item(0).setSelected(True)
+            self.files_view.select_rows([0, 1])
             QApplication.processEvents()
             both = (str(f1) in self.output.toPlainText()
                     and str(f2) in self.output.toPlainText())
-            # rows are painted by our delegate: the selected row must
-            # differ from an unselected one (the accent bar). Delegates are
-            # captured by grab(), unlike stylesheet item backgrounds.
-            self.file_list.clearSelection()
-            QApplication.processEvents()
-            plain = self.file_list.grab().toImage()
-            self.file_list.item(1).setSelected(True)
-            QApplication.processEvents()
-            painted = self.file_list.grab().toImage()
-            row = self.file_list.visualItemRect(self.file_list.item(1))
-            off = self.file_list.viewport().mapTo(self.file_list,
-                                                  QPoint(0, 0))
-            # grabs are in device pixels (Retina), rects in logical points
-            ratio = painted.devicePixelRatio()
-            tx = int((off.x() + row.right() - 20) * ratio)
-            ty = int((off.y() + row.center().y()) * ratio)
-            sel_px = painted.pixelColor(tx, ty)
-            unsel_px = plain.pixelColor(tx, ty)
-            delta = (abs(sel_px.red() - unsel_px.red())
-                     + abs(sel_px.green() - unsel_px.green())
-                     + abs(sel_px.blue() - unsel_px.blue()))
-            delegate_ok = isinstance(self.file_list.itemDelegate(),
-                                     FileRowDelegate)
-            highlight_ok = delegate_ok and delta > 12
             # applying writes only the selected file
-            self.file_list.clearSelection()
-            self.file_list.item(1).setSelected(True)
+            self.files_view.clear()
+            self._add_paths([(str(f1), str(seltmp)), (str(f2), str(seltmp))])
+            QApplication.processEvents()
+            self.files_view.select_index(1)
             QApplication.processEvents()
             self._run(write=True, confirm=False)
             QApplication.processEvents()
@@ -1380,8 +1414,15 @@ class MainWindow(QMainWindow):
                         and f1.read_text(encoding='utf-8')
                         == '中文English中文\n'
                         and (seltmp / 'backup' / 'two.tex.bak').is_file())
-            sel_ok = (mode_ok and button_ok and only_second and both
-                      and highlight_ok and apply_ok)
+            sel_ok = adapter_ok and button_ok and only_second and both \
+                and apply_ok
+            lines.append('selection: list view {}, preview follows '
+                         'selection {}, apply only the selection {}: {}'
+                         .format('native NSTableView'
+                                 if self.files_view.native else 'Qt',
+                                 only_second and both, apply_ok, sel_ok))
+            ok = ok and sel_ok
+
             # framed list with the +/- bar, native icons, names, tooltips
             frame = self.content_panel.parent() and None
             frame = self.findChild(QFrame, 'fileframe')
@@ -1464,24 +1505,40 @@ class MainWindow(QMainWindow):
                               and remove_btn.isEnabled()
                               and '−' == remove_btn.text())
                 native_note = 'Qt fallback buttons'
-            items_ok = all(
-                self.file_list.item(i).data(ROLE_PATH)
-                and self.file_list.item(i).text()
-                == Path(self.file_list.item(i).data(ROLE_PATH)).name
-                and self.file_list.item(i).toolTip()
-                == self.file_list.item(i).data(ROLE_PATH)
-                and not self.file_list.item(i).icon().isNull()
-                for i in range(self.file_list.count()))
+            # rows carry the data the views need (path + scanned root)
+            entries_ok = all(path and root
+                             for path, root in self.files_view.entries())
+            if self.files_view.native:
+                rows = self.files_view.entries()
+                first = rows[0][0] if rows else ''
+                cell = self.files_view.view.cell_view(0)
+                rows_ok = (bool(rows) and cell is not None
+                           and cell.imageView() is not None
+                           and cell.imageView().image() is not None
+                           and cell.textField() is not None
+                           and cell.textField().stringValue()
+                           == Path(first).name
+                           and cell.textField().toolTip() == first)
+            else:
+                rows_ok = all(
+                    self.file_list.item(i).text()
+                    == Path(self.file_list.item(i).data(ROLE_PATH)).name
+                    and self.file_list.item(i).toolTip()
+                    == self.file_list.item(i).data(ROLE_PATH)
+                    and not self.file_list.item(i).icon().isNull()
+                    for i in range(self.file_list.count()))
+            items_ok = entries_ok and rows_ok
             # the − button removes exactly the selected rows
-            self.file_list.clearSelection()
-            self.file_list.item(1).setSelected(True)
+            self.files_view.clear()
+            self._add_paths([(str(f1), str(seltmp)), (str(f2), str(seltmp))])
             QApplication.processEvents()
-            before_remove = self.file_list.count()
+            self.files_view.select_index(1)
+            QApplication.processEvents()
+            before_remove = self.files_view.count()
             self._remove_selected()
             QApplication.processEvents()
-            remaining = [self.file_list.item(i).data(ROLE_PATH)
-                         for i in range(self.file_list.count())]
-            remove_ok = (self.file_list.count() == before_remove - 1
+            remaining = [p for p, _r in self.files_view.entries()]
+            remove_ok = (self.files_view.count() == before_remove - 1
                          and remaining == [str(f1)]
                          and not self.btn_remove.isEnabled())
             placeholder = self.file_list.placeholder_widget()
@@ -1499,14 +1556,7 @@ class MainWindow(QMainWindow):
                              remove_ok, empty_ok, ui_ok))
             ok = ok and ui_ok
 
-            lines.append('selection: multi-select {}, no preview button {}, '
-                         'preview follows selection {}, accent row bar {}, '
-                         'apply only the selection {}: {}'.format(
-                             mode_ok, button_ok, only_second and both,
-                             highlight_ok, apply_ok, sel_ok))
-            ok = ok and sel_ok and highlight_ok
             shutil.rmtree(seltmp, ignore_errors=True)
-            self.file_list.clear()
 
             # option checkboxes: no heading, reflow 2x3 <-> 3x2 by
             # width, equally wide columns spread across the panel
@@ -1657,7 +1707,8 @@ class MainWindow(QMainWindow):
         return icon
 
     def _sync_list_buttons(self, *_args):
-        enabled = bool(self.file_list.selectedItems())
+        enabled = self.files_view.has_selection() if hasattr(
+            self, 'files_view') else False
         self.btn_remove.setEnabled(enabled)
         set_native_plus_minus_enabled(enabled)
 
@@ -1702,14 +1753,10 @@ class MainWindow(QMainWindow):
         self._sync_list_buttons()
 
     def _remove_selected(self):
-        """Drop the selected rows from the list (the − button)."""
-        rows = sorted({self.file_list.row(item)
-                       for item in self.file_list.selectedItems()},
-                      reverse=True)
-        for row in rows:
-            self.file_list.takeItem(row)
+        """Drop the selected rows from the list (the - button)."""
+        self.files_view.remove_selected()
         self._sync_list_buttons()
-        if not self.file_list.count():
+        if not self.files_view.count():
             self.clear_output()
             self.set_status('列表已清空')
 
@@ -1717,29 +1764,21 @@ class MainWindow(QMainWindow):
         """Add paths (str or (str, root) pairs), remembering the scanned
         root each file came from: backups then mirror the source layout
         under <root>/backup. Loose files use their own directory."""
-        existing = {self.file_list.item(i).data(ROLE_PATH)
-                    for i in range(self.file_list.count())}
-        added = 0
-        first_added = None
+        rows = []
         for entry in paths:
             name, file_root = entry if root is None and isinstance(
                 entry, tuple) else (entry, root)
-            if name in existing:
-                continue
-            item = QListWidgetItem(self._file_icon(name), Path(name).name)
-            item.setData(ROLE_PATH, name)
-            item.setData(ROLE_ROOT, str(file_root or Path(name).parent))
-            item.setToolTip(name)
-            self.file_list.addItem(item)
-            existing.add(name)
-            added += 1
-            if first_added is None:
-                first_added = item
-        if first_added is not None and not self.file_list.selectedItems():
-            self.file_list.setCurrentItem(first_added)   # triggers preview
+            rows.append((name, file_root or Path(name).parent))
+        added = self.files_view.add(rows)
         self.set_status('已选择 {} 个文件 (新增 {} 个)'.format(
-            self.file_list.count(), added))
+            self.files_view.count(), added))
         return added
+
+    def _on_list_selection(self):
+        """Selection changed in whichever list view is active: update the
+        +/- buttons and preview the selected files."""
+        self._sync_list_buttons()
+        self._preview_selection()
 
     # ---------- actions ----------
 
@@ -1800,7 +1839,7 @@ class MainWindow(QMainWindow):
             self.show_error(traceback.format_exc())
 
     def clear_files(self):
-        self.file_list.clear()
+        self.files_view.clear()
         self.clear_output()
         self.set_status('列表已清空')
 
@@ -1811,16 +1850,8 @@ class MainWindow(QMainWindow):
             self.show_error(traceback.format_exc())
 
     def _selected_entries(self):
-        """(path, root) for the selected list items, in list order."""
-        entries = []
-        for i in range(self.file_list.count()):
-            item = self.file_list.item(i)
-            if not item.isSelected():
-                continue
-            path = item.data(ROLE_PATH) or item.text()
-            root = item.data(ROLE_ROOT)
-            entries.append((Path(path), Path(root) if root else None))
-        return entries
+        """(path, root) for the selected rows, in list order."""
+        return self.files_view.selected_entries()
 
     def _format_options(self):
         return FormatOptions(

@@ -152,6 +152,24 @@ def _material_constant(AppKit, name):
     return table.get(name.lower(), AppKit.NSVisualEffectMaterialHeaderView)
 
 
+def slot_rect_in_theme(window, slot, inset=0.0, height=None):
+    """Convert a Qt widget's rect into the window's theme-frame (AppKit)
+    coordinates, where native subviews placed over the widget live.
+
+    Returns ``(qt_view, theme, rect)``; ``rect`` is a
+    ``((x, y), (w, h))`` pair suitable for ``setFrame_``."""
+    import objc
+    from PySide6.QtCore import QPoint
+
+    qt_view = objc.objc_object(c_void_p=int(window.winId()))
+    theme = qt_view.superview()
+    top_left = slot.mapTo(window, QPoint(int(inset), int(inset)))
+    rect = ((float(top_left.x()), float(top_left.y())),
+            (float(slot.width() - 2 * inset),
+             float((slot.height() if height is None else height) - 2 * inset)))
+    return qt_view, theme, qt_view.convertRect_toView_(rect, theme)
+
+
 def native_window_color(dark=False):
     """The platform's native window background as '#rrggbb', so Qt can
     paint its content surface with the real system colour instead of its
