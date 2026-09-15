@@ -36,13 +36,8 @@ _NOTES = []
 
 BAND_HEIGHT = 52.0
 # footer (+/- bar) metrics, matching macOS Settings' footer proportions
-FOOTER_SYMBOL_SIZE = 12.0      # SF Symbol point size for plus/minus
-FOOTER_BUTTON_WIDTH = 26.0
-FOOTER_BUTTON_HEIGHT = 20.0
-FOOTER_ROW_PADDING = 4.0       # row height = button height + this
-FOOTER_SEPARATOR_HEIGHT = 12.0
-FOOTER_SEPARATOR_GAP = 3.0     # equal gap on each side of the divider
-FOOTER_INSET = 10.0            # left inset of the group inside the row
+FOOTER_ROW_PADDING = 0.0       # row height = the control's native height
+FOOTER_INSET = 10.0            # left inset of the control inside the row
 FOOTER_CORNER_RADIUS = 8.0     # matches the list frame's border radius
 # The footer bar reads as a *raised* translucent bar in Settings: a
 # light/dark overlay on top of the material. Tuned so the band ends up
@@ -62,9 +57,7 @@ _SWITCH_TARGET = None
 _SWITCH_SLOT = None
 _SWITCH_TARGET_CLASS = None
 _CLICK_THROUGH_CLASS = None
-_PLUS_MINUS_ADD = None
-_PLUS_MINUS_SEP = None
-_PLUS_MINUS_REMOVE = None
+_PLUS_MINUS = None
 _PLUS_MINUS_TARGET = None
 _PLUS_MINUS_TARGET_CLASS = None
 _FOOTER_VIEW = None
@@ -283,27 +276,6 @@ def _debug_outlines():
         _outline(_TITLE_VIEW, 1.0, 0.9, 0.0)     # yellow: title label
 
 
-def _footer_tint(AppKit, dark):
-    """Overlay colour for the footer bar (None to leave it alone).
-    Override the strengths with FORMAT_TEX_FOOTER_TINT[_DARK|_LIGHT]."""
-    def env(name, default):
-        try:
-            return float(os.environ.get(name, default))
-        except (TypeError, ValueError):
-            return default
-    if dark:
-        alpha = env('FORMAT_TEX_FOOTER_TINT_DARK',
-                    env('FORMAT_TEX_FOOTER_TINT', FOOTER_TINT_DARK))
-        base = AppKit.NSColor.whiteColor()
-    else:
-        alpha = env('FORMAT_TEX_FOOTER_TINT_LIGHT',
-                    env('FORMAT_TEX_FOOTER_TINT', FOOTER_TINT_LIGHT))
-        base = AppKit.NSColor.blackColor()
-    if alpha <= 0:
-        return None
-    return base.colorWithAlphaComponent_(min(1.0, alpha))
-
-
 def footer_material_name():
     """Material for the native strip behind the list's +/- row. macOS
     Settings panes give the footer its own subtle material; override for
@@ -409,25 +381,16 @@ def footer_strip_view():
     return _FOOTER_VIEW
 
 
-def footer_button_style():
-    """Glyph button style for the footer's +/- controls: ``accessory``
-    ``borderless`` (no bezel: plain glyphs on the band, the System
-    Settings footer look - the default) or ``accessory`` (the
-    NSBezelStyleAccessoryBarAction bezel). Override with
-    FORMAT_TEX_FOOTER_BUTTON_STYLE."""
-    return os.environ.get('FORMAT_TEX_FOOTER_BUTTON_STYLE',
-                          'borderless').strip().lower()
-
-
 def _plus_minus_target_class():
-    """pyobjc target for the footer's +/- buttons (tag 0 = add, 1 = remove)."""
+    """pyobjc target for the footer's +/- control: dispatch on the clicked
+    segment (0 = add, 1 = remove)."""
     global _PLUS_MINUS_TARGET_CLASS
     if _PLUS_MINUS_TARGET_CLASS is None:
         from AppKit import NSObject
 
         class _PlusMinusTarget(NSObject):
-            def footerClicked_(self, sender):
-                if int(sender.tag()) == 0:
+            def segmentClicked_(self, sender):
+                if int(sender.selectedSegment()) == 0:
                     self.on_add()
                 else:
                     self.on_remove()
@@ -436,110 +399,61 @@ def _plus_minus_target_class():
     return _PLUS_MINUS_TARGET_CLASS
 
 
-def _sf_symbol_image(AppKit, symbol, legacy_name,
-                     point_size=FOOTER_SYMBOL_SIZE):
-    image = AppKit.NSImage.imageWithSystemSymbolName_accessibilityDescription_(
-        symbol, symbol)
-    if image is not None:
-        try:
-            config = AppKit.NSImageSymbolConfiguration \
-                .configurationWithPointSize_weight_(
-                    float(point_size), AppKit.NSFontWeightRegular)
-            sized = image.imageWithSymbolConfiguration_(config)
-            if sized is not None:
-                image = sized
-        except Exception:
-            pass
-    else:
-        image = AppKit.NSImage.imageNamed_(legacy_name)
-    try:
-        image.setTemplate_(True)
-    except Exception:
-        pass
-    return image
-
-
 def create_native_plus_minus(window, on_add, on_remove):
-    """The footer's +/- controls: two plain glyph buttons (SF Symbols)
-    with a 1 pt native separator between them, sitting on the footer's
-    blur band - the System Settings footer look. There is deliberately no
-    segmented-control bezel, which would draw a pill around the glyphs.
+    """The footer's +/- control, built the official way: a two-segment
+    NSSegmentedControl with the Small Square style and the built-in
+    NSAddTemplate / NSRemoveTemplate images, in momentary mode - the
+    pattern Apple documents for a table view's action buttons. The
+    control draws its own thin-bordered two-cell box (and the divider
+    between the cells), so no separate separator is needed.
+
     Returns True on success; callers keep the Qt buttons otherwise."""
-    global _PLUS_MINUS_ADD, _PLUS_MINUS_SEP, _PLUS_MINUS_REMOVE
-    global _PLUS_MINUS_TARGET
+    global _PLUS_MINUS, _PLUS_MINUS_TARGET
     if sys.platform != 'darwin':
         return False
     try:
         import objc
         import AppKit
 
-        if _PLUS_MINUS_ADD is None:
+        if _PLUS_MINUS is None:
             target = _plus_minus_target_class().alloc().init()
             target.on_add = on_add
             target.on_remove = on_remove
-            style = footer_button_style()
-            buttons = []
-            for tag, (symbol, legacy) in enumerate(
-                    (('plus', AppKit.NSImageNameAddTemplate),
-                     ('minus', AppKit.NSImageNameRemoveTemplate))):
-                button = AppKit.NSButton.alloc().init()
-                button.setImage_(_sf_symbol_image(AppKit, symbol, legacy))
-                button.setImagePosition_(AppKit.NSImageOnly)
-                if style == 'borderless':
-                    # plain glyph: no bezel, and no tint override - the
-                    # template image already renders in the standard
-                    # content colour and dims natively when disabled
-                    button.setBordered_(False)
-                else:
-                    button.setBordered_(True)
-                    button.setBezelStyle_(
-                        AppKit.NSBezelStyleAccessoryBarAction)
-                button.setTarget_(target)
-                button.setAction_(b'footerClicked:')
-                button.setTag_(tag)
-                button.sizeToFit()
-                buttons.append(button)
-            if style == 'borderless':
-                # a borderless button shrinks to the glyph: give both the
-                # same hit area so the band keeps its native height
-                size = AppKit.NSMakeSize(FOOTER_BUTTON_WIDTH,
-                                         FOOTER_BUTTON_HEIGHT)
-            else:
-                size = AppKit.NSMakeSize(
-                    max(b.frame().size.width for b in buttons),
-                    max(b.frame().size.height for b in buttons))
-            for button in buttons:
-                button.setFrameSize_(size)
-            width, height = size.width, size.height
-            separator = AppKit.NSBox.alloc().init()
-            separator.setBoxType_(AppKit.NSBoxSeparator)
-            separator.setFrameSize_((1.0, FOOTER_SEPARATOR_HEIGHT))
-            _PLUS_MINUS_ADD, _PLUS_MINUS_REMOVE = buttons
-            _PLUS_MINUS_SEP = separator
-            _PLUS_MINUS_TARGET = target
+            control = AppKit.NSSegmentedControl.alloc().init()
+            control.setSegmentCount_(2)
+            control.setSegmentStyle_(AppKit.NSSegmentStyleSmallSquare)
+            control.setTrackingMode_(
+                AppKit.NSSegmentSwitchTrackingMomentary)
+            for index, name in enumerate(('NSAddTemplate',
+                                          'NSRemoveTemplate')):
+                image = AppKit.NSImage.imageNamed_(name)
+                control.setImage_forSegment_(image, index)
+            control.setTarget_(target)
+            control.setAction_(b'segmentClicked:')
+            control.sizeToFit()
+            _PLUS_MINUS, _PLUS_MINUS_TARGET = control, target
 
         qt_view = objc.objc_object(c_void_p=int(window.winId()))
         theme = qt_view.superview()
-        for view in (_PLUS_MINUS_ADD, _PLUS_MINUS_SEP, _PLUS_MINUS_REMOVE):
-            try:
-                view.removeFromSuperview()
-            except Exception:
-                pass
-            theme.addSubview_positioned_relativeTo_(
-                view, AppKit.NSWindowAbove, qt_view)
+        try:
+            _PLUS_MINUS.removeFromSuperview()
+        except Exception:
+            pass
+        theme.addSubview_positioned_relativeTo_(_PLUS_MINUS,
+                                               AppKit.NSWindowAbove, qt_view)
+        _PLUS_MINUS.sizeToFit()
         return True
     except Exception as exc:
-        _note('native +/- controls failed: {}: {}'.format(
+        _note('native +/- control failed: {}: {}'.format(
             type(exc).__name__, exc))
         return False
 
 
 def place_native_plus_minus(window, slot):
-    """Left-align the +/- group inside the bar row, vertically centred and
-    clamped so it can never leave the band."""
+    """Left-align the +/- control inside the bar row, vertically centred
+    and clamped so it can never leave the band."""
     global _PLUS_MINUS_SLOT
-    if (sys.platform != 'darwin' or _PLUS_MINUS_ADD is None
-            or slot is None):
+    if sys.platform != 'darwin' or _PLUS_MINUS is None or slot is None:
         return
     _PLUS_MINUS_SLOT = slot
     try:
@@ -552,59 +466,68 @@ def place_native_plus_minus(window, slot):
         rect = ((float(top_left.x()), float(top_left.y())),
                 (float(slot.width()), float(slot.height())))
         target = qt_view.convertRect_toView_(rect, theme)
-        size = _PLUS_MINUS_ADD.frame().size
-        sep_size = _PLUS_MINUS_SEP.frame().size
-        hidden = slot.isVisible() is False
-        left = target.origin.x + FOOTER_INSET
+        size = _PLUS_MINUS.frame().size
+        x = target.origin.x + FOOTER_INSET
         y = target.origin.y + (target.size.height - size.height) / 2.0
         y = max(target.origin.y,
                 min(y, target.origin.y + target.size.height - size.height))
-        gap = FOOTER_SEPARATOR_GAP
-        _PLUS_MINUS_ADD.setFrame_(((left, y), (size.width, size.height)))
-        sep_x = left + size.width + gap
-        sep_y = target.origin.y + (target.size.height - sep_size.height) / 2.0
-        _PLUS_MINUS_SEP.setFrame_(((sep_x, sep_y),
-                                   (sep_size.width, sep_size.height)))
-        remove_x = sep_x + sep_size.width + gap
-        _PLUS_MINUS_REMOVE.setFrame_(((remove_x, y),
-                                      (size.width, size.height)))
-        for view in (_PLUS_MINUS_ADD, _PLUS_MINUS_SEP, _PLUS_MINUS_REMOVE):
-            view.setHidden_(hidden)
+        # the Qt row can differ from the band by the frame's border width,
+        # so clamp the control into the band itself: it must never poke
+        # out of the footer (or the frame)
+        if _FOOTER_VIEW is not None:
+            band = _FOOTER_VIEW.frame()
+            x = max(band.origin.x + 1.0,
+                    min(x, band.origin.x + band.size.width - size.width - 1.0))
+            y = max(band.origin.y,
+                    min(y, band.origin.y + band.size.height - size.height))
+        _PLUS_MINUS.setFrame_(((x, y), (size.width, size.height)))
+        _PLUS_MINUS.setHidden_(slot.isVisible() is False)
     except Exception as exc:
         _note('+/- placement failed: {}: {}'.format(type(exc).__name__, exc))
 
 
 def set_native_plus_minus_enabled(remove_enabled):
-    """Grey out the '-' button when nothing is selected."""
+    """Grey out the '-' segment when nothing is selected."""
     try:
-        if _PLUS_MINUS_REMOVE is not None:
-            _PLUS_MINUS_REMOVE.setEnabled_(bool(remove_enabled))
+        if _PLUS_MINUS is not None:
+            _PLUS_MINUS.setEnabled_forSegment_(bool(remove_enabled), 1)
     except Exception:
         pass
 
 
 def native_plus_minus_height():
-    """Height of a native footer glyph button in points (0 when absent),
-    so the Qt row can be sized from it instead of guessing."""
+    """Height of the native +/- control in points (0 when absent), so the
+    Qt row can be sized to it instead of guessing."""
     try:
-        if _PLUS_MINUS_ADD is not None:
-            return float(_PLUS_MINUS_ADD.frame().size.height)
+        if _PLUS_MINUS is not None:
+            return float(_PLUS_MINUS.frame().size.height)
     except Exception:
         pass
     return 0.0
 
 
+def has_native_plus_minus():
+    return _PLUS_MINUS is not None
+
+
+def native_plus_minus_view():
+    return _PLUS_MINUS
+
+
 def footer_tint_rgba(dark=None):
     """(r, g, b, a) overlay for the footer bar, or None when disabled.
-    Used by the GUI, which paints it over the native material (a layer
-    background on the material view itself is hidden behind it)."""
+    The GUI paints this over the native material: a layer background on
+    the material view itself ends up behind the material and is invisible.
+    Override the strength with FORMAT_TEX_FOOTER_TINT[_DARK|_LIGHT]."""
     if dark is None:
         dark = _FOOTER_DARK
+
     def env(name, default):
         try:
             return float(os.environ.get(name, default))
         except (TypeError, ValueError):
             return default
+
     if dark:
         alpha = env('FORMAT_TEX_FOOTER_TINT_DARK',
                     env('FORMAT_TEX_FOOTER_TINT', FOOTER_TINT_DARK))
@@ -615,25 +538,9 @@ def footer_tint_rgba(dark=None):
 
 
 def footer_metrics():
-    """(row_padding, button_height, separator_height, inset, gap)
-    so callers/tests can assert the native proportions."""
-    return (FOOTER_ROW_PADDING, FOOTER_BUTTON_HEIGHT,
-            FOOTER_SEPARATOR_HEIGHT, FOOTER_INSET,
-            FOOTER_SEPARATOR_GAP)
-
-
-def has_native_plus_minus():
-    return _PLUS_MINUS_ADD is not None
-
-
-def native_plus_minus_view():
-    """The add button (kept for callers that only need the native view)."""
-    return _PLUS_MINUS_ADD
-
-
-def footer_control_views():
-    """(add button, separator, remove button) or (None, None, None)."""
-    return (_PLUS_MINUS_ADD, _PLUS_MINUS_SEP, _PLUS_MINUS_REMOVE)
+    """(row_padding, control_height) so callers/tests can assert that the
+    footer row matches the native control's height."""
+    return (FOOTER_ROW_PADDING, native_plus_minus_height())
 
 
 def _switch_target_class():

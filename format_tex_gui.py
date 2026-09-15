@@ -49,7 +49,7 @@ from platform_effects import (apply_effects, arrange_in_front,
                               has_native_switch, last_material_view,
                               last_sidebar_view, last_title_view,
                               lights_inset,
-                              footer_control_views, footer_metrics,
+                              footer_metrics,
                               footer_tint_rgba,
                               footer_strip_view,
                               has_native_plus_minus,
@@ -1392,16 +1392,9 @@ class MainWindow(QMainWindow):
             remove_btn = self.btn_remove
             if has_native_plus_minus():
                 strip = footer_strip_view()
-                add_glyph, sep, remove_glyph = footer_control_views()
+                control = native_plus_minus_view()
                 images_ok = all(
-                    b is not None and b.image() is not None
-                    for b in (add_glyph, remove_glyph))
-                # no pill around the glyphs: accessory-bar style (default,
-                # plain at rest + hover highlight) or fully borderless
-                style_ok = (remove_glyph is not None
-                            and (not remove_glyph.isBordered()
-                                 or remove_glyph.bezelStyle()
-                                 == AppKit.NSBezelStyleAccessoryBarAction))
+                    control.imageForSegment_(i) is not None for i in (0, 1))
 
                 def theme_rect(widget, inset=0.0):
                     tl = widget.mapTo(self, QPoint(int(inset), int(inset)))
@@ -1418,42 +1411,27 @@ class MainWindow(QMainWindow):
                             and inner.origin.y + inner.size.height
                             <= outer.origin.y + outer.size.height + 0.5)
 
-                def group_fits():
-                    edges = theme_rect(self.file_frame, 1.0)
-                    return all(inside(v.frame(), strip.frame())
-                               for v in (add_glyph, sep, remove_glyph)) \
-                        and inside(strip.frame(), edges)
+                def fits():
+                    return (inside(control.frame(), strip.frame())
+                            and inside(strip.frame(),
+                                       theme_rect(self.file_frame, 1.0)))
 
-                sep_ok = (sep is not None
-                          and abs(sep.frame().size.width - 1.0) < 0.5
-                          and add_glyph.frame().origin.x
-                          + add_glyph.frame().size.width
-                          <= sep.frame().origin.x + 0.5
-                          and sep.frame().origin.x + 1.0
-                          <= remove_glyph.frame().origin.x + 0.5)
-                # containment again after a resize: stale native rects are
-                # exactly the bug this guards against
-                contained = group_fits()
-                self.resize(self.width() + 40, self.height() + 30)
-                QApplication.processEvents()
-                contained = contained and group_fits()
-                # native proportions: 20 pt buttons in a 24 pt row
-                pad, btn_h, sep_h, inset, gap = footer_metrics()
-                heights_ok = (abs(native_plus_minus_height() - btn_h) <= 1
-                              and abs(self.pm_bar.height()
-                                      - (btn_h + pad)) <= 1)
-                # the divider between the glyphs must be centred: equal
-                # gaps on both sides
-                gap_left = sep.frame().origin.x \
-                    - (add_glyph.frame().origin.x
-                       + add_glyph.frame().size.width)
-                gap_right = remove_glyph.frame().origin.x \
-                    - (sep.frame().origin.x + sep.frame().size.width)
-                centred_ok = abs(gap_left - gap_right) <= 0.5
-                # no stray Qt fallback line left of the +
-                divider_gone = not self.pm_divider.isVisible()
-                # the material strip is the frame's bottom slice: only the
-                # bottom corners round (masked corners = bottom pair)
+                # official configuration: Small Square, 2 segments,
+                # built-in add/remove images, momentary
+                style_ok = (control.segmentCount() == 2
+                            and control.segmentStyle()
+                            == AppKit.NSSegmentStyleSmallSquare
+                            and control.trackingMode()
+                            == AppKit.NSSegmentSwitchTrackingMomentary
+                            and images_ok)
+                # the row matches the control's native height
+                _, ctrl_h = footer_metrics()
+                heights_ok = (abs(ctrl_h - native_plus_minus_height()) <= 1
+                              and abs(self.pm_bar.height() - ctrl_h) <= 1)
+                # no stray Qt fallback widgets left of the control
+                divider_gone = (not self.pm_divider.isVisible()
+                                and not self.btn_add.isVisible()
+                                and not self.btn_remove.isVisible())
                 try:
                     layer = strip.layer()
                     mask_ok = (layer is not None
@@ -1461,25 +1439,25 @@ class MainWindow(QMainWindow):
                                and abs(layer.cornerRadius() - 8) < 0.5)
                 except Exception:
                     mask_ok = False
-                # translucent overlay on the row (raised bar): present and
-                # matching the appearance-aware tint
                 rgba = footer_tint_rgba(self.dark)
                 tint_ok = (rgba is not None and rgba[3] > 0
                            and 'rgba({}, {}, {}, {}'.format(*rgba)
                            in self.pm_bar.styleSheet())
-                small_ok = native_plus_minus_height() <= 22
-                buttons_ok = (images_ok and style_ok and sep_ok and contained
-                              and strip is not None and small_ok
-                              and heights_ok and centred_ok and divider_gone
-                              and mask_ok and tint_ok
-                              and not self.btn_add.isVisible())
-                native_note = ('native glyph group ({:.0f} pt) in a '
-                               '{:.0f} pt row, separator centred (gaps '
-                               '{:.1f}/{:.1f}), bottom-only corners {}, '
-                               'raised overlay {}, no stray divider'
-                               .format(native_plus_minus_height(),
-                                       self.pm_bar.height(), gap_left,
-                                       gap_right, mask_ok, tint_ok))
+                contained = fits()
+                self.resize(self.width() + 40, self.height() + 30)
+                QApplication.processEvents()
+                contained = contained and fits()
+                buttons_ok = (style_ok and heights_ok and divider_gone
+                              and mask_ok and tint_ok and contained
+                              and strip is not None)
+                native_note = ('native NSSegmentedControl SmallSquare '
+                               '({:.0f} pt) in a {:.0f} pt row; style {}, '
+                               'height {}, no stray Qt {}, corners {}, '
+                               'overlay {}, contained {}'.format(
+                                   native_plus_minus_height(),
+                                   self.pm_bar.height(), style_ok,
+                                   heights_ok, divider_gone, mask_ok,
+                                   tint_ok, contained))
             else:
                 buttons_ok = (add_btn.isEnabled()
                               and 'listadd' == add_btn.objectName()
@@ -1691,9 +1669,8 @@ class MainWindow(QMainWindow):
             control = create_native_plus_minus(self, self.add_files,
                                                self._remove_selected)
             if control and native_plus_minus_height():
-                # size the row to the control that was really built, plus
-                # the native footer padding (24 pt with the default 20 pt
-                # buttons - the Settings footer proportion)
+                # the row is exactly the control's native height (the
+                # official pattern has it flush under the footer hairline)
                 height = int(round(native_plus_minus_height()
                                    + footer_metrics()[0]))
                 if height != self.pm_bar.height():
