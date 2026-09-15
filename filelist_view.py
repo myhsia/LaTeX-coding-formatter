@@ -274,12 +274,149 @@ class NativeFileListAdapter:
         self.list.placeholder_widget().setVisible(self.view.count() == 0)
 
 
+class Win32FileListAdapter:
+    """A real ``SysListView32`` hosted in the Qt list widget (Windows).
+
+    Built later (from ``apply_window_effects``); if it cannot be created
+    every call falls back to the Qt adapter, so Windows cannot regress.
+    The Qt list stays as the empty-state host."""
+
+    native = True
+
+    def __init__(self, window):
+        from win32_list import Win32FileList
+
+        self.window = window
+        self.list = window.file_list
+        self.view = Win32FileList(
+            window, self.list,
+            on_selection=window._on_list_selection,
+            on_drop=window.drop_paths,
+            colours=self._colours())
+        self.active = False
+        self._fallback = None
+
+    def _colours(self):
+        from PySide6.QtGui import QPalette
+
+        palette = self.list.palette()
+        return {
+            'window': palette.color(QPalette.ColorRole.Window).name(),
+            'text': palette.color(QPalette.ColorRole.WindowText).name(),
+        }
+
+    def build(self):
+        if self.active:
+            return True
+        try:
+            self.active = bool(self.view.build())
+        except Exception:
+            self.active = False
+        if self.active:
+            self._sync_hint()
+            self.place()
+            return True
+        return False
+
+    def _impl(self):
+        if self.active:
+            return self
+        if self._fallback is None:
+            self._fallback = QtFileListAdapter(self.window)
+        return self._fallback
+
+    # ---------- interface ----------
+    def add(self, rows):
+        impl = self._impl()
+        if impl is not self:
+            return impl.add(rows)
+        added = self.view.add(_entries(rows))
+        if added and not self.view.has_selection():
+            self.view.select_index(0)
+        self._sync_hint()
+        return added
+
+    def clear(self):
+        impl = self._impl()
+        if impl is not self:
+            return impl.clear()
+        self.view.clear()
+        self._sync_hint()
+
+    def count(self):
+        return self._impl()._count()
+
+    def _count(self):
+        return self.view.count()
+
+    def entries(self):
+        impl = self._impl()
+        return list(self.view.items) if impl is self else impl.entries()
+
+    def selected_entries(self):
+        impl = self._impl()
+        if impl is not self:
+            return impl.selected_entries()
+        return self.view.selected_entries()
+
+    def has_selection(self):
+        impl = self._impl()
+        if impl is not self:
+            return impl.has_selection()
+        return self.view.has_selection()
+
+    def remove_selected(self):
+        impl = self._impl()
+        if impl is not self:
+            return impl.remove_selected()
+        removed = self.view.remove_selected()
+        self._sync_hint()
+        return removed
+
+    def select_index(self, row):
+        impl = self._impl()
+        if impl is not self:
+            return impl.select_index(row)
+        return self.view.select_index(row)
+
+    def select_rows(self, rows):
+        impl = self._impl()
+        if impl is not self:
+            return impl.select_rows(rows)
+        return self.view.select_rows(rows)
+
+    def select_first(self):
+        impl = self._impl()
+        if impl is not self:
+            return impl.select_first()
+        return self.view.select_first()
+
+    def selection_rows(self):
+        impl = self._impl()
+        if impl is not self:
+            return impl.selection_rows()
+        return self.view.selection_rows()
+
+    def place(self):
+        if self.active:
+            self.view.place()
+
+    def _sync_hint(self):
+        self.list.placeholder_widget().setVisible(self.view.count() == 0)
+
+
 def create_file_list_view(window):
     """Native on macOS (falling back to Qt if it cannot be created)."""
-    if not __import__('sys').platform == 'darwin':
-        return QtFileListAdapter(window)
-    try:
-        return NativeFileListAdapter(window)
-    except Exception:
-        pass
+    import sys as _sys
+
+    if _sys.platform == 'darwin':
+        try:
+            return NativeFileListAdapter(window)
+        except Exception:
+            pass
+    elif _sys.platform == 'win32':
+        try:
+            return Win32FileListAdapter(window)
+        except Exception:
+            pass
     return QtFileListAdapter(window)

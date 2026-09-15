@@ -2198,6 +2198,9 @@ class MainWindow(QMainWindow):
         ok = True
         try:
             lines.append('platform: {} (Qt application)'.format(sys.platform))
+            lines.append('file list: nat{}/active:{}'.format(
+                getattr(self.files_view, 'native', False),
+                getattr(self.files_view, 'active', 'n/a')))
             visible = bool(self.isVisible())
             lines.append('window visible: {}'.format(visible))
             ok = ok and visible
