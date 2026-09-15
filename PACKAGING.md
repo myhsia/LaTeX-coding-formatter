@@ -134,9 +134,26 @@ macOS 上这些区域已是 AppKit 原生视图 (叠加在提供几何位置的 
 **macOS 已完全脱离 Qt**: macOS 构建使用 `format_tex_app_mac.py` (纯 AppKit:
 `NSWindow` + `NSSplitView` 窗口外壳, 原生视图, AppKit 对话框与原生菜单),
 共用 `format_tex_controller.py` (无 GUI 依赖的逻辑) 与 `format_tex_theme.py`
-(调色板, 按系统外观选择). Windows/Linux 继续使用 Qt 版本 (`format_tex_gui.py`),
-行为由同一套控制器保证一致. macOS 产物因此不再包含 PySide6 (体积约 43 MB → 29 MB),
+(调色板, 按系统外观选择). macOS 产物因此不再包含 PySide6 (体积约 43 MB → 29 MB),
 其自检为 `--self-test` 写出的 `format_tex_mac_selftest.txt` (CI 校验 PASS).
+
+### Windows 原生文件列表
+
+Windows 保留 Qt 外壳 (`format_tex_gui.py`), 但**文件列表是真正的 Win32
+`SysListView32`** (由 `win32_list.py` 用 `ctypes` 创建, `SetParent` 挂进
+Qt 列表控件的原生 HWND): report 视图 + 整行选择 (`LVS_EX_FULLROWSELECT`)、
+shell 文件图标 (`SHGetFileInfoW` + `ImageList`)、资源管理器拖放
+(`DragAcceptFiles`/`WM_DROPFILES`)、按 Qt 调色板着色 (`LVM_SETBKCOLOR` 等 +
+`SetWindowTheme`), 选择变化经宿主窗口的 WndProc 子类 (`WM_NOTIFY`/
+`LVN_ITEMCHANGED`) 上报. 所有 Win32 调用都显式声明了 `argtypes`/`restype`
+(否则 ctypes 会把 64 位 HWND/指针截断成 32 位并让进程崩溃).
+
+`Win32FileListAdapter` 在创建失败时自动回退到 Qt 列表 (Windows 不会因此
+回退), 但 CI 的 Windows 自检会**强制要求** `file list: natTrue/active:True`
+(即原生列表确实生效), 而不是仅要求 `PASS`.
+
+Linux 仍使用 Qt 列表; 由于 Linux 没有可嵌入的原生控件工具包, 该平台不计划
+原生视图.
 
 ### macOS 菜单与快捷键
 
