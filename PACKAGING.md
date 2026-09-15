@@ -184,15 +184,18 @@ secondary 标签色, 复现原生的"非活动变暗"行为 (实测活动态 #dd
 列表支持多选 (⌘/Ctrl 点选、⇧ 连选、⌘A 全选)。
 框内底部为 System Settings 风格的 **+ / −** 按钮条 (左侧): 整条是**整宽的
 原生材质条** (`NSVisualEffectView`, 默认 material `headerView`, 可用
-`FORMAT_TEX_FOOTER_MATERIAL` 覆盖为 `contentBackground` 等做对比; 材质条对齐
-列表边框内侧底边, 宽度=边框内宽, 底边距边框底 1 pt, 圆角半径与边框一致且只圆
-下面两角, 顶边平接分隔线 —— 即系统设置面板页脚的原生处理方式, 而非纯色填充);
-其上为**两个原生无边框字形按钮** (SF Symbols `plus`/`minus`, 模板图片, 15 pt)
-与二者之间的 **1 pt 原生分隔线** (`NSBox`, `NSBoxTypeSeparator`), 因此没有
-分段控件那种把两个字形框住的圆角底 (pill). 按钮样式可用
-`FORMAT_TEX_FOOTER_BUTTON_STYLE=borderless|accessory` 切换 (默认 `borderless`
-即上图效果; `accessory` 使用 `NSBezelStyleAccessoryBarAction` 底色作为对照).
-按钮始终被约束在该行与边框之内 (不会越出边框); 其他平台回退为 Qt 按钮,
+`FORMAT_TEX_FOOTER_MATERIAL` 覆盖) **再叠加一层随外观变化的极淡半透明覆盖**
+(深色下白色 12%、浅色下黑色 6%, 可用 `FORMAT_TEX_FOOTER_TINT[_DARK|_LIGHT]`
+调整), 因此页脚像系统设置面板那样是"**抬起**的半透明条"——比上方列表略亮,
+而不是凹陷的深色块. 材质条**对齐列表边框内侧底边** (宽度=边框内宽, 底边距边框底
+1 pt), 圆角半径与边框一致且**只圆下面两角** (顶边平接分隔线, 即边框底部的
+那一"片"), 因此左边框/底边框的圆角与列表框完全吻合.
+其上为**两个原生无边框字形按钮** (SF Symbols `plus`/`minus`, 模板图片,
+12 pt 小字号) 与二者之间**居中的 1 pt 原生分隔线** (`NSBox`,
+`NSBoxTypeSeparator`, 两侧间距相等), 没有分段控件那种把两个字形框住的圆角底
+(pill). 按钮 26×20 pt, 行高 24 pt (与系统设置页脚比例一致); 按钮样式可用
+`FORMAT_TEX_FOOTER_BUTTON_STYLE=borderless|accessory` 切换 (默认 `borderless`).
+按钮与分隔线始终被约束在该行与边框之内 (不会越出边框); 其他平台回退为 Qt 按钮,
 样式与尺寸保持一致.
 **+** 直接打开文件选择对话框, **−** 从列表移除**所选**条目 (无选中时置灰);
 列表为空时显示提示文字与 "选择文件/选择目录" 链接 (可拖入文件或文件夹)。

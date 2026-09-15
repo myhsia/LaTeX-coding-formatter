@@ -35,6 +35,22 @@ import sys
 _NOTES = []
 
 BAND_HEIGHT = 52.0
+# footer (+/- bar) metrics, matching macOS Settings' footer proportions
+FOOTER_SYMBOL_SIZE = 12.0      # SF Symbol point size for plus/minus
+FOOTER_BUTTON_WIDTH = 26.0
+FOOTER_BUTTON_HEIGHT = 20.0
+FOOTER_ROW_PADDING = 4.0       # row height = button height + this
+FOOTER_SEPARATOR_HEIGHT = 12.0
+FOOTER_SEPARATOR_GAP = 3.0     # equal gap on each side of the divider
+FOOTER_INSET = 10.0            # left inset of the group inside the row
+FOOTER_CORNER_RADIUS = 8.0     # matches the list frame's border radius
+# The footer bar reads as a *raised* translucent bar in Settings: a
+# light/dark overlay on top of the material. Tuned so the band ends up
+# slightly lighter than the list in dark mode (and slightly darker in
+# light mode), like the native reference.
+FOOTER_TINT_DARK = 0.12        # white overlay strength in dark mode
+FOOTER_TINT_LIGHT = 0.06       # black overlay strength in light mode
+_FOOTER_DARK = True
 LIGHTS_INSET = 19.0      # native unified-toolbar inset (Finder/Notes)
 TITLE_GAP = 12.0         # gap between the sidebar edge and the title
 _BAND_VIEW = None
@@ -267,6 +283,27 @@ def _debug_outlines():
         _outline(_TITLE_VIEW, 1.0, 0.9, 0.0)     # yellow: title label
 
 
+def _footer_tint(AppKit, dark):
+    """Overlay colour for the footer bar (None to leave it alone).
+    Override the strengths with FORMAT_TEX_FOOTER_TINT[_DARK|_LIGHT]."""
+    def env(name, default):
+        try:
+            return float(os.environ.get(name, default))
+        except (TypeError, ValueError):
+            return default
+    if dark:
+        alpha = env('FORMAT_TEX_FOOTER_TINT_DARK',
+                    env('FORMAT_TEX_FOOTER_TINT', FOOTER_TINT_DARK))
+        base = AppKit.NSColor.whiteColor()
+    else:
+        alpha = env('FORMAT_TEX_FOOTER_TINT_LIGHT',
+                    env('FORMAT_TEX_FOOTER_TINT', FOOTER_TINT_LIGHT))
+        base = AppKit.NSColor.blackColor()
+    if alpha <= 0:
+        return None
+    return base.colorWithAlphaComponent_(min(1.0, alpha))
+
+
 def footer_material_name():
     """Material for the native strip behind the list's +/- row. macOS
     Settings panes give the footer its own subtle material; override for
@@ -276,13 +313,14 @@ def footer_material_name():
                           'headerView').strip()
 
 
-def create_footer_strip(window, frame_widget, row_widget):
+def create_footer_strip(window, frame_widget, row_widget, dark=True):
     """A native material strip behind the list's +/- row, so the footer
     reads like a Settings pane's footer rather than a flat tint. Anchored
     to the frame's inner bottom band (square top edge under the hairline,
     bottom corners rounded to match the frame), and placed BELOW the Qt
     view, which is transparent there. Returns True on success."""
-    global _FOOTER_VIEW
+    global _FOOTER_VIEW, _FOOTER_DARK
+    _FOOTER_DARK = bool(dark)
     if sys.platform != 'darwin':
         return False
     try:
@@ -294,14 +332,22 @@ def create_footer_strip(window, frame_widget, row_widget):
             _FOOTER_VIEW = _make_material_view(
                 AppKit, material,
                 AppKit.NSVisualEffectBlendingModeWithinWindow)
+
             # follow the frame's bottom radius (layer masks are numeric:
             # minXMaxY | maxXMaxY = 4 | 8)
             try:
                 _FOOTER_VIEW.setWantsLayer_(True)
-                _FOOTER_VIEW.layer().setCornerRadius_(8.0)
-                _FOOTER_VIEW.layer().setMaskedCorners_(4 | 8)
+                layer = _FOOTER_VIEW.layer()
+                if layer is not None:
+                    layer.setCornerRadius_(FOOTER_CORNER_RADIUS)
+                    # the view layer's Y axis is flipped: the *bottom* pair
+                    # is minXminY | maxXminY. Only those round, so the
+                    # strip is the frame's bottom slice (top edge square,
+                    # meeting the hairline).
+                    layer.setMaskedCorners_(1 | 2)
             except Exception:
                 pass
+
         qt_view = objc.objc_object(c_void_p=int(window.winId()))
         theme = qt_view.superview()
         try:
@@ -390,7 +436,8 @@ def _plus_minus_target_class():
     return _PLUS_MINUS_TARGET_CLASS
 
 
-def _sf_symbol_image(AppKit, symbol, legacy_name, point_size=15.0):
+def _sf_symbol_image(AppKit, symbol, legacy_name,
+                     point_size=FOOTER_SYMBOL_SIZE):
     image = AppKit.NSImage.imageWithSystemSymbolName_accessibilityDescription_(
         symbol, symbol)
     if image is not None:
@@ -454,8 +501,9 @@ def create_native_plus_minus(window, on_add, on_remove):
                 buttons.append(button)
             if style == 'borderless':
                 # a borderless button shrinks to the glyph: give both the
-                # same comfortable hit area so the band keeps its height
-                size = AppKit.NSMakeSize(26.0, 22.0)
+                # same hit area so the band keeps its native height
+                size = AppKit.NSMakeSize(FOOTER_BUTTON_WIDTH,
+                                         FOOTER_BUTTON_HEIGHT)
             else:
                 size = AppKit.NSMakeSize(
                     max(b.frame().size.width for b in buttons),
@@ -465,7 +513,7 @@ def create_native_plus_minus(window, on_add, on_remove):
             width, height = size.width, size.height
             separator = AppKit.NSBox.alloc().init()
             separator.setBoxType_(AppKit.NSBoxSeparator)
-            separator.setFrameSize_((1.0, max(14.0, height - 8.0)))
+            separator.setFrameSize_((1.0, FOOTER_SEPARATOR_HEIGHT))
             _PLUS_MINUS_ADD, _PLUS_MINUS_REMOVE = buttons
             _PLUS_MINUS_SEP = separator
             _PLUS_MINUS_TARGET = target
@@ -505,21 +553,23 @@ def place_native_plus_minus(window, slot):
                 (float(slot.width()), float(slot.height())))
         target = qt_view.convertRect_toView_(rect, theme)
         size = _PLUS_MINUS_ADD.frame().size
+        sep_size = _PLUS_MINUS_SEP.frame().size
         hidden = slot.isVisible() is False
-        x = target.origin.x + 8.0
+        left = target.origin.x + FOOTER_INSET
         y = target.origin.y + (target.size.height - size.height) / 2.0
         y = max(target.origin.y,
                 min(y, target.origin.y + target.size.height - size.height))
-        for view in (_PLUS_MINUS_ADD, _PLUS_MINUS_REMOVE):
-            view.setFrame_(((x, y), (size.width, size.height)))
-            view.setHidden_(hidden)
-            x += size.width + 3.0
-        sep_size = _PLUS_MINUS_SEP.frame().size
-        sep_x = target.origin.x + 8.0 + size.width + 2.0
+        gap = FOOTER_SEPARATOR_GAP
+        _PLUS_MINUS_ADD.setFrame_(((left, y), (size.width, size.height)))
+        sep_x = left + size.width + gap
         sep_y = target.origin.y + (target.size.height - sep_size.height) / 2.0
         _PLUS_MINUS_SEP.setFrame_(((sep_x, sep_y),
                                    (sep_size.width, sep_size.height)))
-        _PLUS_MINUS_SEP.setHidden_(hidden)
+        remove_x = sep_x + sep_size.width + gap
+        _PLUS_MINUS_REMOVE.setFrame_(((remove_x, y),
+                                      (size.width, size.height)))
+        for view in (_PLUS_MINUS_ADD, _PLUS_MINUS_SEP, _PLUS_MINUS_REMOVE):
+            view.setHidden_(hidden)
     except Exception as exc:
         _note('+/- placement failed: {}: {}'.format(type(exc).__name__, exc))
 
@@ -542,6 +592,34 @@ def native_plus_minus_height():
     except Exception:
         pass
     return 0.0
+
+
+def footer_tint_rgba(dark=None):
+    """(r, g, b, a) overlay for the footer bar, or None when disabled.
+    Used by the GUI, which paints it over the native material (a layer
+    background on the material view itself is hidden behind it)."""
+    if dark is None:
+        dark = _FOOTER_DARK
+    def env(name, default):
+        try:
+            return float(os.environ.get(name, default))
+        except (TypeError, ValueError):
+            return default
+    if dark:
+        alpha = env('FORMAT_TEX_FOOTER_TINT_DARK',
+                    env('FORMAT_TEX_FOOTER_TINT', FOOTER_TINT_DARK))
+        return (255, 255, 255, max(0.0, min(1.0, alpha)))
+    alpha = env('FORMAT_TEX_FOOTER_TINT_LIGHT',
+                env('FORMAT_TEX_FOOTER_TINT', FOOTER_TINT_LIGHT))
+    return (0, 0, 0, max(0.0, min(1.0, alpha)))
+
+
+def footer_metrics():
+    """(row_padding, button_height, separator_height, inset, gap)
+    so callers/tests can assert the native proportions."""
+    return (FOOTER_ROW_PADDING, FOOTER_BUTTON_HEIGHT,
+            FOOTER_SEPARATOR_HEIGHT, FOOTER_INSET,
+            FOOTER_SEPARATOR_GAP)
 
 
 def has_native_plus_minus():

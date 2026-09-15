@@ -49,7 +49,9 @@ from platform_effects import (apply_effects, arrange_in_front,
                               has_native_switch, last_material_view,
                               last_sidebar_view, last_title_view,
                               lights_inset,
-                              footer_control_views, footer_strip_view,
+                              footer_control_views, footer_metrics,
+                              footer_tint_rgba,
+                              footer_strip_view,
                               has_native_plus_minus,
                               native_plus_minus_height,
                               place_footer_strip,
@@ -472,8 +474,8 @@ class MainWindow(QMainWindow):
         # breathing room; keep the same height on other platforms so the
         # Qt fallback buttons look identical
         self.pm_bar.setFixedHeight(
-            int(round(native_plus_minus_height())) + 8 if
-            native_plus_minus_height() else 28)
+            int(round(native_plus_minus_height() + footer_metrics()[0]))
+            if native_plus_minus_height() else 24)
         bar = QHBoxLayout(self.pm_bar)
         bar.setContentsMargins(4, 2, 4, 2)
         bar.setSpacing(0)
@@ -491,6 +493,7 @@ class MainWindow(QMainWindow):
         self.btn_remove.setEnabled(False)
         self.btn_remove.clicked.connect(self._remove_selected)
         divider = QFrame()
+        self.pm_divider = divider
         divider.setObjectName('plusminussep')
         divider.setFixedWidth(1)
         divider.setFixedHeight(16)
@@ -1434,15 +1437,49 @@ class MainWindow(QMainWindow):
                 self.resize(self.width() + 40, self.height() + 30)
                 QApplication.processEvents()
                 contained = contained and group_fits()
-                small_ok = native_plus_minus_height() <= 26
+                # native proportions: 20 pt buttons in a 24 pt row
+                pad, btn_h, sep_h, inset, gap = footer_metrics()
+                heights_ok = (abs(native_plus_minus_height() - btn_h) <= 1
+                              and abs(self.pm_bar.height()
+                                      - (btn_h + pad)) <= 1)
+                # the divider between the glyphs must be centred: equal
+                # gaps on both sides
+                gap_left = sep.frame().origin.x \
+                    - (add_glyph.frame().origin.x
+                       + add_glyph.frame().size.width)
+                gap_right = remove_glyph.frame().origin.x \
+                    - (sep.frame().origin.x + sep.frame().size.width)
+                centred_ok = abs(gap_left - gap_right) <= 0.5
+                # no stray Qt fallback line left of the +
+                divider_gone = not self.pm_divider.isVisible()
+                # the material strip is the frame's bottom slice: only the
+                # bottom corners round (masked corners = bottom pair)
+                try:
+                    layer = strip.layer()
+                    mask_ok = (layer is not None
+                               and int(layer.maskedCorners()) == 3
+                               and abs(layer.cornerRadius() - 8) < 0.5)
+                except Exception:
+                    mask_ok = False
+                # translucent overlay on the row (raised bar): present and
+                # matching the appearance-aware tint
+                rgba = footer_tint_rgba(self.dark)
+                tint_ok = (rgba is not None and rgba[3] > 0
+                           and 'rgba({}, {}, {}, {}'.format(*rgba)
+                           in self.pm_bar.styleSheet())
+                small_ok = native_plus_minus_height() <= 22
                 buttons_ok = (images_ok and style_ok and sep_ok and contained
                               and strip is not None and small_ok
+                              and heights_ok and centred_ok and divider_gone
+                              and mask_ok and tint_ok
                               and not self.btn_add.isVisible())
-                native_note = ('native glyph group ({:.0f} pt) on the '
-                               'full-width strip, contained, separator '
-                               '{:.0f} pt'.format(
-                                   native_plus_minus_height(),
-                                   sep.frame().size.width))
+                native_note = ('native glyph group ({:.0f} pt) in a '
+                               '{:.0f} pt row, separator centred (gaps '
+                               '{:.1f}/{:.1f}), bottom-only corners {}, '
+                               'raised overlay {}, no stray divider'
+                               .format(native_plus_minus_height(),
+                                       self.pm_bar.height(), gap_left,
+                                       gap_right, mask_ok, tint_ok))
             else:
                 buttons_ok = (add_btn.isEnabled()
                               and 'listadd' == add_btn.objectName()
@@ -1654,11 +1691,15 @@ class MainWindow(QMainWindow):
             control = create_native_plus_minus(self, self.add_files,
                                                self._remove_selected)
             if control and native_plus_minus_height():
-                # size the row to the control that was really built
-                height = int(round(native_plus_minus_height())) + 8
+                # size the row to the control that was really built, plus
+                # the native footer padding (24 pt with the default 20 pt
+                # buttons - the Settings footer proportion)
+                height = int(round(native_plus_minus_height()
+                                   + footer_metrics()[0]))
                 if height != self.pm_bar.height():
                     self.pm_bar.setFixedHeight(height)
-            strip = create_footer_strip(self, self.file_frame, self.pm_bar)
+            strip = create_footer_strip(self, self.file_frame, self.pm_bar,
+                                        dark=self.dark)
             # the control is inserted unpositioned: place it (and keep it
             # placed through reposition_materials on every layout change)
             if control:
@@ -1666,8 +1707,20 @@ class MainWindow(QMainWindow):
         except Exception:
             strip = control = False
         if strip and control:
+            # the native glyph group replaces all three Qt widgets,
+            # including the divider (leaving it visible drew a stray
+            # vertical line left of the +)
             self.btn_add.setVisible(False)
             self.btn_remove.setVisible(False)
+            self.pm_divider.setVisible(False)
+            # translucent overlay over the material, so the footer reads
+            # as a raised bar (the reference is *lighter* than the list)
+            rgba = footer_tint_rgba(self.dark)
+            if rgba and rgba[3] > 0:
+                self.pm_bar.setStyleSheet(
+                    '#plusminusbar {{ background: rgba({}, {}, {}, {});'
+                    ' border-bottom-left-radius: 8px;'
+                    ' border-bottom-right-radius: 8px; }}'.format(*rgba))
         self._native_plus_minus = bool(control)
         self._sync_list_buttons()
 
