@@ -165,6 +165,166 @@ class OptionControl:
             or self.slot.isVisible()
 
 
+class PopUpControl:
+    """A Qt combo (data/fallback) plus, on macOS, a native ``NSPopUpButton``
+    drawn over a transparent spacer slot."""
+
+    def __init__(self, qt, items, current, window, custom_label=None):
+        self.qt = qt
+        self.items = list(items)
+        self.current = str(current)
+        self.window = window
+        self.custom_label = custom_label
+        self.native = None
+        self.slot = SpacerWidget()
+        self.slot.setFixedSize(max(90, qt.sizeHint().width() + 10), 24)
+
+    def build_native(self):
+        if sys.platform != 'darwin':
+            return False
+        from native_mac import NativePopUpButton
+
+        self.native = NativePopUpButton(
+            self.window, self.slot, self.items, self.current,
+            on_change=self._changed, custom_label=self.custom_label)
+        built = bool(self.native.build())
+        if built:
+            width, height = self.native.size()
+            self.slot.setFixedSize(max(int(width) + 2, 90),
+                                   max(int(height) + 2, 24))
+            # the native popup covers it: a visible Qt combo would push
+            # the slot past the layout margin
+            self.qt.setVisible(False)
+        return built
+
+    def _changed(self, title):
+        # the custom entry reuses the Qt dialog flow, then mirrors the
+        # resulting value back into the native popup
+        if self.custom_label and title == self.custom_label:
+            self.qt._choose(CUSTOM_SENTINEL)
+            QTimer.singleShot(0, lambda: self.setCurrentText(
+                self.qt.currentText()))
+            return
+        self.current = title
+        self.qt.setCurrentText(title)
+
+    def currentText(self):
+        if self.native is not None and self.native.active:
+            return self.native.currentText()
+        return self.qt.currentText()
+
+    def setCurrentText(self, value):
+        self.current = str(value)
+        self.qt.setCurrentText(self.current)
+        if self.native is not None and self.native.active:
+            self.native.setCurrentText(self.current)
+
+    def fit_to_menu(self):
+        """Qt-only behaviour; the native popup sizes itself."""
+        return None
+
+    def isVisible(self):
+        return bool(self.native is not None and self.native.isVisible()) \
+            or self.slot.isVisible()
+
+    def place(self):
+        if self.native is not None and self.native.active:
+            self.native.place()
+
+
+class ButtonControl:
+    """A Qt button (data/fallback) plus a native ``NSButton`` on macOS."""
+
+    def __init__(self, qt, title, window, on_click=None):
+        self.qt = qt
+        self.title = title
+        self.window = window
+        self.on_click = on_click
+        self.native = None
+        self.slot = SpacerWidget()
+        self.slot.setFixedSize(max(qt.sizeHint().width(), 90),
+                               max(qt.sizeHint().height(), 26))
+
+    def build_native(self):
+        if sys.platform != 'darwin':
+            return False
+        from native_mac import NativePushButton
+
+        self.native = NativePushButton(self.window, self.slot, self.title,
+                                       on_click=self.on_click)
+        built = bool(self.native.build())
+        if built:
+            width, height = self.native.size()
+            self.slot.setFixedSize(max(int(width) + 2, 90),
+                                   max(int(height) + 2, 26))
+            self.qt.setVisible(False)
+        return built
+
+    def setEnabled(self, value):
+        self.qt.setEnabled(bool(value))
+        if self.native is not None and self.native.active:
+            self.native.setEnabled(value)
+
+    def isEnabled(self):
+        return self.qt.isEnabled()
+
+    def isVisible(self):
+        return bool(self.native is not None and self.native.isVisible()) \
+            or self.slot.isVisible()
+
+    def place(self):
+        if self.native is not None and self.native.active:
+            self.native.place()
+
+
+class LabelControl:
+    """A Qt label (data/fallback) plus a native ``NSTextField`` on macOS."""
+
+    def __init__(self, qt, text, window):
+        self.qt = qt
+        self.window = window
+        self.native = None
+        self._text = str(text)
+        self.slot = SpacerWidget()
+        self.slot.setFixedHeight(max(qt.sizeHint().height(), 20))
+        self.slot.setMinimumWidth(60)
+
+    def build_native(self):
+        if sys.platform != 'darwin':
+            return False
+        from native_mac import NativeLabel
+
+        self.native = NativeLabel(self.window, self.slot, self._text)
+        built = bool(self.native.build())
+        if built:
+            width, height = self.native.size()
+            self.slot.setFixedSize(max(int(width) + 4, 60),
+                                   max(int(height) + 2, 20))
+            self.qt.setVisible(False)
+        return built
+
+    def setText(self, text):
+        self._text = str(text)
+        self.qt.setText(self._text)
+        if self.native is not None and self.native.active:
+            self.native.setText(self._text)
+            width, height = self.native.size()
+            self.slot.setFixedSize(max(int(width) + 4, 60),
+                                   max(int(height) + 2, 20))
+
+    def text(self):
+        if self.native is not None and self.native.active:
+            return self.native.text()
+        return self.qt.text()
+
+    def isVisible(self):
+        return self.slot.isVisible()
+
+    def place(self):
+        if self.native is not None and self.native.active:
+            self.native.place()
+
+
 class FileRowDelegate(QStyledItemDelegate):
     """Finder / System Settings style rows in the file list: the native
     file icon, the file name (full path lives in the tooltip), a hairline
@@ -475,9 +635,11 @@ class MainWindow(QMainWindow):
         ext_row = QHBoxLayout()
         ext_row.addWidget(QLabel('扩展名'))
         ext_row.addStretch(1)
-        self.ext_edit = NativeMenuCombo(EXTENSIONS, '.tex')
-        self.ext_edit.fit_to_menu()
-        ext_row.addWidget(self.ext_edit)
+        self.ext_edit = PopUpControl(NativeMenuCombo(EXTENSIONS, '.tex'),
+                                     EXTENSIONS, '.tex', self,
+                                     custom_label=NativeMenuCombo.CUSTOM_LABEL)
+        ext_row.addWidget(self.ext_edit.qt)
+        ext_row.addWidget(self.ext_edit.slot)
         gv.addLayout(ext_row)
 
         rowsep = QFrame()
@@ -629,9 +791,11 @@ class MainWindow(QMainWindow):
 
         enc = QHBoxLayout()
         enc.addWidget(QLabel('输出编码'))
-        self.enc_out = NativeMenuCombo(ENCODINGS, '同输入')
-        self.enc_out.fit_to_menu()
-        enc.addWidget(self.enc_out)
+        self.enc_out = PopUpControl(NativeMenuCombo(ENCODINGS, '同输入'),
+                                    ENCODINGS, '同输入', self,
+                                    custom_label=NativeMenuCombo.CUSTOM_LABEL)
+        enc.addWidget(self.enc_out.qt)
+        enc.addWidget(self.enc_out.slot)
         enc.addWidget(QLabel('(输入编码自动检测; 输出默认同输入编码, '
                              '也可输入任意编码名)'))
         enc.addStretch(1)
@@ -640,9 +804,12 @@ class MainWindow(QMainWindow):
         actions = QHBoxLayout()
         # no preview button: selecting an item in the file list previews
         # its diff automatically, and "应用格式化" writes the selection
-        self.btn_apply = QPushButton('应用格式化')
-        self.btn_apply.clicked.connect(lambda: self.run(write=True))
-        actions.addWidget(self.btn_apply)
+        self.btn_apply = ButtonControl(
+            QPushButton('应用格式化'), '应用格式化', self,
+            on_click=lambda: self.run(write=True))
+        self.btn_apply.qt.clicked.connect(lambda: self.run(write=True))
+        actions.addWidget(self.btn_apply.qt)
+        actions.addWidget(self.btn_apply.slot)
         actions.addStretch(1)
         layout.addLayout(actions)
 
@@ -661,12 +828,13 @@ class MainWindow(QMainWindow):
             setattr(self, 'fmt_' + tag, fmt)
         layout.addWidget(self.output, 1)
 
-        self.status_label = QLabel('就绪')
-        self.status_label.setObjectName('statuslabel')
-        self.status_label.setStyleSheet(
+        self.status_label = LabelControl(QLabel('就绪'), '就绪', self)
+        self.status_label.qt.setObjectName('statuslabel')
+        self.status_label.qt.setStyleSheet(
             '#statuslabel {{ color: {}; padding-top: 2px; }}'.format(
                 self.palette().color(QPalette.ColorRole.WindowText).name()))
-        layout.addWidget(self.status_label)
+        layout.addWidget(self.status_label.qt)
+        layout.addWidget(self.status_label.slot)
 
         self.effect_note = None
         self._effects_applied = False
@@ -911,6 +1079,9 @@ class MainWindow(QMainWindow):
         self._setup_native_plus_minus()
         for _slot, wrapper in self._option_widgets:
             wrapper.build_native()
+        for wrapper in (self.ext_edit, self.enc_out, self.btn_apply,
+                        self.status_label):
+            wrapper.build_native()
         self.files_view.build()
         self.diff_view.build()
         if debug_enabled():
@@ -939,6 +1110,12 @@ class MainWindow(QMainWindow):
             self.diff_view.place()
         for _slot, wrapper in getattr(self, '_option_widgets', ()):
             wrapper.place()
+        for wrapper in (getattr(self, 'ext_edit', None),
+                        getattr(self, 'enc_out', None),
+                        getattr(self, 'btn_apply', None),
+                        getattr(self, 'status_label', None)):
+            if wrapper is not None:
+                wrapper.place()
         if sys.platform == 'darwin' and menus.installed() \
                 and not menus.is_current():
             menus.install(self)
@@ -1109,27 +1286,56 @@ class MainWindow(QMainWindow):
                          '{}'.format(group_ok))
             ok = ok and group_ok
 
-            # the extension button is auto-sized to its menu (so the
-            # popup highlight coincides with it), right-aligned, and
-            # leaves the ".tex" label + arrow room
-            ext_w = self.ext_edit.width()
-            row = self.ext_edit.parentWidget().layout()
-            right_aligned = abs(
-                self.ext_edit.geometry().right()
-                - (self.ext_edit.parentWidget().width()
-                   - row.contentsMargins().right())) < 2
-            opt = QStyleOptionComboBox()
-            self.ext_edit.initStyleOption(opt)
-            arrow = self.ext_edit.style().subControlRect(
-                QStyle.ComplexControl.CC_ComboBox, opt,
-                QStyle.SubControl.SC_ComboBoxArrow, self.ext_edit)
-            text_w = QFontMetrics(self.ext_edit.font()).horizontalAdvance(
-                '.tex')
-            slack = ext_w - arrow.width() - text_w
-            ext_ok = right_aligned and slack >= 6
-            lines.append('extension button auto-sized ({:.0f} pt, arrow '
-                         '{:.0f}, slack {:.0f}) and right-aligned: '
-                         '{}'.format(ext_w, arrow.width(), slack, ext_ok))
+            # the extension control fills its menu width, keeps the
+            # ".tex" label visible and is right-aligned in the group
+            if getattr(self.ext_edit, 'native', None) is not None \
+                    and self.ext_edit.native.active:
+                slot = self.ext_edit.slot
+                group = self.ext_edit.qt.parentWidget()
+                row = group.layout()
+                margin = None
+                for i in range(row.count()):
+                    item = row.itemAt(i)
+                    if item is not None and item.widget() is slot:
+                        pass
+                right_aligned = abs(
+                    slot.geometry().right()
+                    - (group.width() - 10)) < 3
+                native = self.ext_edit.native.view
+                titles = [native.itemTitleAtIndex_(i)
+                          for i in range(native.numberOfItems())]
+                width = native.frame().size.width
+                # the slot has a floor width, so the popup only
+                # has to fit inside it
+                fits = width <= slot.width() + 1 and width >= 60
+                ext_ok = (right_aligned and fits
+                          and self.ext_edit.items[0] in titles
+                          and (self.ext_edit.custom_label or '') in titles)
+                lines.append('extension control: native NSPopUpButton '
+                             '({:.0f} pt) with {} items, right-aligned {}, '
+                             'inside its slot {}: {}'.format(
+                                 width, len(titles), right_aligned, fits,
+                                 ext_ok))
+            else:
+                ext_w = self.ext_edit.qt.width()
+                row = self.ext_edit.qt.parentWidget().layout()
+                right_aligned = abs(
+                    self.ext_edit.qt.geometry().right()
+                    - (self.ext_edit.qt.parentWidget().width()
+                       - row.contentsMargins().right())) < 2
+                opt = QStyleOptionComboBox()
+                self.ext_edit.qt.initStyleOption(opt)
+                arrow = self.ext_edit.qt.style().subControlRect(
+                    QStyle.ComplexControl.CC_ComboBox, opt,
+                    QStyle.SubControl.SC_ComboBoxArrow, self.ext_edit.qt)
+                text_w = QFontMetrics(self.ext_edit.qt.font()) \
+                    .horizontalAdvance('.tex')
+                slack = ext_w - arrow.width() - text_w
+                ext_ok = right_aligned and slack >= 6
+                lines.append('extension button auto-sized ({:.0f} pt, arrow '
+                             '{:.0f}, slack {:.0f}) and right-aligned: '
+                             '{}'.format(ext_w, arrow.width(), slack,
+                                         ext_ok))
             ok = ok and ext_ok
 
             # the native NSSwitch is overlaid on its slot; verify in
@@ -1343,12 +1549,26 @@ class MainWindow(QMainWindow):
             lines.append('dropdown menu model (order/check/custom): '
                          '{}'.format(model_ok))
             ok = ok and model_ok
-            combos_ok = (isinstance(self.ext_edit, NativeMenuCombo)
-                         and isinstance(self.enc_out, NativeMenuCombo)
-                         and not self.ext_edit.isEditable()
-                         and not self.enc_out.isEditable())
-            lines.append('both dropdowns are native popup buttons: '
-                         '{}'.format(combos_ok))
+            if getattr(self.ext_edit, 'native', None) is not None \
+                    and self.ext_edit.native.active \
+                    and getattr(self.enc_out, 'native', None) is not None \
+                    and self.enc_out.native.active:
+                combos_ok = (self.ext_edit.native.view.numberOfItems()
+                             == len(self.ext_edit.items) + 1
+                             and self.enc_out.native.view.numberOfItems()
+                             == len(self.enc_out.items) + 1
+                             and self.ext_edit.currentText()
+                             and self.enc_out.currentText())
+            else:
+                combos_ok = (isinstance(self.ext_edit.qt, NativeMenuCombo)
+                             and isinstance(self.enc_out.qt, NativeMenuCombo)
+                             and not self.ext_edit.qt.isEditable()
+                             and not self.enc_out.qt.isEditable())
+            lines.append('dropdowns ({}): {}'.format(
+                'native NSPopUpButton' if getattr(self.ext_edit, 'native',
+                                                  None) is not None
+                and self.ext_edit.native.active else 'Qt combo',
+                combos_ok))
             ok = ok and combos_ok
 
             # 输出编码: popup exactly the button width; 扩展名: narrow
@@ -1361,12 +1581,21 @@ class MainWindow(QMainWindow):
                     NativeMenuCombo.CUSTOM_LABEL, min_width=combo.width())
                 return menu
 
-            enc_menu = popup_for(self.enc_out)
-            ext_menu = popup_for(self.ext_edit)
-            width_ok = (abs(enc_menu.size().width - self.enc_out.width()) < 1
-                        and abs(ext_menu.size().width
-                                - self.ext_edit.width()) < 1)
-            lines.append('popup width == button width for both dropdowns: '
+            if getattr(self.ext_edit, 'native', None) is not None \
+                    and self.ext_edit.native.active:
+                # the native popups carry their own menu; just confirm both
+                # are inside their slots
+                width_ok = all(
+                    abs(w.native.size()[1] - w.slot.height()) <= 4
+                    for w in (self.ext_edit, self.enc_out))
+            else:
+                enc_menu = popup_for(self.enc_out.qt)
+                ext_menu = popup_for(self.ext_edit.qt)
+                width_ok = (
+                    abs(enc_menu.size().width - self.enc_out.qt.width()) < 1
+                    and abs(ext_menu.size().width
+                            - self.ext_edit.qt.width()) < 1)
+            lines.append('popup fits its control for both dropdowns: '
                          '{}'.format(width_ok))
             ok = ok and width_ok
 
@@ -1718,6 +1947,30 @@ class MainWindow(QMainWindow):
                              '(also after resize) {}: {}'.format(
                                  pane_ok, fits_ok, pane_ok and fits_ok))
                 ok = ok and pane_ok and fits_ok
+
+            # native apply button + status label (macOS)
+            btn = self.btn_apply
+            lbl = self.status_label
+            if (getattr(btn, 'native', None) is not None and btn.native.active
+                    and getattr(lbl, 'native', None) is not None
+                    and lbl.native.active):
+                btn.setEnabled(False)
+                disabled_ok = (not btn.native.isEnabled()
+                               and not btn.qt.isEnabled())
+                btn.setEnabled(True)
+                enabled_ok = btn.native.isEnabled() and btn.qt.isEnabled()
+                probe = '状态检查'
+                lbl.setText(probe)
+                QApplication.processEvents()
+                label_ok = (lbl.text() == probe
+                            and str(lbl.native.view.stringValue()) == probe
+                            and lbl.slot.width() >= 40)
+                wrapper_ok = disabled_ok and enabled_ok and label_ok
+                lbl.setText('就绪')
+                lines.append('native apply button (enable/disable mirrors Qt '
+                             '{}) and status label (text mirrored {}): '
+                             '{}'.format(enabled_ok, label_ok, wrapper_ok))
+                ok = ok and wrapper_ok
 
             # native option checkboxes (macOS): real NSButton checkboxes
             # drawn over transparent spacer slots
