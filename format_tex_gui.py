@@ -2855,8 +2855,13 @@ def main():
     if selftest:
         app.processEvents()
         ok = window.self_test()
-        window.close()
-        return 0 if ok else 1
+        # The report is already on disk, so exit directly: on Windows
+        # interpreter/Qt teardown wedges after the window closes (the
+        # hosted Win32 children keep the onefile process alive), which
+        # used to leave a hung process behind for CI to kill.
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0 if ok else 1)
     return app.exec()
 
 
