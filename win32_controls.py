@@ -120,19 +120,52 @@ def _next_id():
     return _NEXT_ID[0]
 
 
-def _system_font(user32, gdi32):
-    """The shell's message font (Segoe UI on modern Windows), shared."""
-    global _FONT
-    if _FONT is not None:
-        return _FONT
+def _message_font(user32, gdi32):
+    """The shell's message font (Segoe UI on modern Windows)."""
     try:
         metrics = NONCLIENTMETRICSW()
         metrics.cbSize = ctypes.sizeof(NONCLIENTMETRICSW)
         if user32.SystemParametersInfoW(
                 SPI_GETNONCLIENTMETRICS, metrics.cbSize, _as_ptr(metrics), 0):
-            _FONT = gdi32.CreateFontIndirectW(_as_ptr(metrics.lfMessageFont))
+            return gdi32.CreateFontIndirectW(_as_ptr(metrics.lfMessageFont))
+    except Exception:
+        pass
+    return None
+
+
+def make_control_font(slot, user32, gdi32):
+    """A Win32 font matching the slot's Qt font, scaled for the window DPI.
+
+    Win32 controls have no notion of ``devicePixelRatio``: a font has to be
+    created with a pixel height. Taking the Qt point size at the *logical*
+    DPI makes the text half-size on a 200% display, so the Qt font's pixel
+    metrics are multiplied by the slot's device pixel ratio to get the
+    physical height. The font is shared (all controls share the app font).
+    """
+    global _FONT
+    if _FONT is not None:
+        return _FONT
+    try:
+        from PySide6.QtGui import QFontMetricsF
+
+        font = slot.font()
+        try:
+            ratio = float(slot.devicePixelRatioF())
+        except Exception:
+            ratio = 1.0
+        metrics = QFontMetricsF(font)
+        height = int(round((metrics.ascent() + metrics.descent()) * ratio))
+        logfont = LOGFONTW()
+        logfont.lfHeight = -max(1, height)
+        logfont.lfWeight = 700 if font.bold() else 400
+        logfont.lfCharSet = 1                # DEFAULT_CHARSET
+        logfont.lfQuality = 5                # CLEARTYPE_QUALITY
+        logfont.lfFaceName = str(font.family())[:31]
+        _FONT = gdi32.CreateFontIndirectW(_as_ptr(logfont))
     except Exception:
         _FONT = None
+    if _FONT is None:
+        _FONT = _message_font(user32, gdi32)
     return _FONT
 
 
@@ -212,15 +245,23 @@ class _Win32Control:
         self._null_brush = g.GetStockObject(NULL_BRUSH)
 
     def _slot_size(self):
-        """The slot's client area in device pixels (Qt rects are logical)."""
-        rect = self.slot.rect()
-        ratio = 1.0
+        """The slot's client area in device pixels.
+
+        The host HWND's ``GetClientRect`` is authoritative at any DPI;
+        mixing Qt's logical rect with a manual ``devicePixelRatioF`` scale
+        drifts (and leaves stale sizes when the ratio changes).
+        """
         try:
-            ratio = float(self.slot.devicePixelRatioF())
+            rect = wintypes.RECT()
+            if self._user32.GetClientRect(self._host, _as_ptr(rect)):
+                width = rect.right - rect.left
+                height = rect.bottom - rect.top
+                if width > 0 and height > 0:
+                    return (width, height)
         except Exception:
-            ratio = 1.0
-        return (max(1, int(round(rect.width() * ratio))),
-                max(1, int(round(rect.height() * ratio))))
+            pass
+        rect = self.slot.rect()
+        return (max(1, rect.width()), max(1, rect.height()))
 
     def _text_colour(self):
         try:
@@ -238,7 +279,7 @@ class _Win32Control:
     def _create(self, class_name, style, text=''):
         self._load()
         self._host = int(self.slot.winId())      # forces the slot native
-        self._font = _system_font(self._user32, self._gdi32)
+        self._font = make_control_font(self.slot, self._user32, self._gdi32)
         self._fg = self._text_colour()
         width, height = self._slot_size()
         hwnd = self._user32.CreateWindowExW(

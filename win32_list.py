@@ -25,6 +25,7 @@ LPARAM = ctypes.c_ssize_t
 WPARAM = ctypes.c_size_t
 
 WM_SIZE = 0x0005
+WM_SETFONT = 0x0030
 WM_NOTIFY = 0x004E
 WM_DROPFILES = 0x0233
 WM_NCDESTROY = 0x0082
@@ -144,6 +145,7 @@ class Win32FileList:
         self._proc_ref = None
         self._icon_list = None
         self._icons = {}                # (is_dir, suffix) -> image index
+        self._font = None
         self._in_notify = False
 
     # ---------- creation ----------
@@ -176,6 +178,8 @@ class Win32FileList:
         u.MoveWindow.restype = wintypes.BOOL
         u.MoveWindow.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_int,
                                  ctypes.c_int, ctypes.c_int, wintypes.BOOL]
+        u.GetClientRect.restype = wintypes.BOOL
+        u.GetClientRect.argtypes = [wintypes.HWND, ctypes.c_void_p]
         u.ShowWindow.restype = wintypes.BOOL
         u.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
         u.CallWindowProcW.restype = LRESULT
@@ -183,6 +187,9 @@ class Win32FileList:
                                       wintypes.UINT, WPARAM, LPARAM]
         u.DestroyIcon.restype = wintypes.BOOL
         u.DestroyIcon.argtypes = [wintypes.HICON]
+
+        g.CreateFontIndirectW.restype = ctypes.c_void_p
+        g.CreateFontIndirectW.argtypes = [ctypes.c_void_p]
 
         setter = getattr(u, 'SetWindowLongPtrW', None) or u.SetWindowLongW
         setter.restype = ctypes.c_void_p
@@ -238,6 +245,7 @@ class Win32FileList:
                 return False
             self._hwnd = hwnd
             self._comctl32.InitCommonControls()
+            self._apply_font()
 
             self._user32.SendMessageW(
                 hwnd, LVM_SETEXTENDEDLISTVIEWSTYLE, 0,
@@ -263,6 +271,24 @@ class Win32FileList:
             self._note('win32 file list failed: {}: {}'.format(
                 type(exc).__name__, exc))
             return False
+
+    def _apply_font(self):
+        """Scale the row font for the display DPI.
+
+        ``SysListView32`` ships with a fixed 8 pt default that is tiny at
+        400% scaling; reuse the Qt font mapping from ``win32_controls`` so
+        the list matches the rest of the window.
+        """
+        try:
+            from win32_controls import make_control_font
+
+            self._font = make_control_font(self.slot, self._user32,
+                                           self._gdi32)
+            if self._font:
+                self._user32.SendMessageW(self._hwnd, WM_SETFONT,
+                                          self._font, True)
+        except Exception:
+            self._font = None
 
     def _apply_colours(self):
         """Match the Qt palette (light/dark) instead of the system theme."""
@@ -292,12 +318,8 @@ class Win32FileList:
         if self._hwnd is None:
             return
         try:
-            rect = self.slot.rect()
-            client = self.slot.mapTo(self.slot, rect.topLeft())
-            width = max(1, rect.width())
-            height = max(1, rect.height())
-            self._user32.MoveWindow(self._hwnd, client.x(), client.y(),
-                                    width, height, True)
+            width, height = self._host_size()
+            self._user32.MoveWindow(self._hwnd, 0, 0, width, height, True)
             self._user32.ShowWindow(self._hwnd,
                                     5 if self.slot.isVisible() else 0)
             # keep the single column as wide as the control
@@ -305,6 +327,20 @@ class Win32FileList:
                 self._hwnd, LVM_SETCOLUMNWIDTH, 0, max(40, width - 4))
         except Exception:
             pass
+
+    def _host_size(self):
+        """The host HWND's client area in device pixels (Qt rects are logical)."""
+        try:
+            rect = wintypes.RECT()
+            if self._user32.GetClientRect(self._host, _as_ptr(rect)):
+                width = rect.right - rect.left
+                height = rect.bottom - rect.top
+                if width > 0 and height > 0:
+                    return (width, height)
+        except Exception:
+            pass
+        rect = self.slot.rect()
+        return (max(1, rect.width()), max(1, rect.height()))
 
     # ---------- model ----------
     def add(self, rows):

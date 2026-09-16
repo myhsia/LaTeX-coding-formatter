@@ -167,17 +167,24 @@ jobs:
           # and the report is checkpointed after every step
           "$GITHUB_WORKSPACE/dist/format-tex-gui-${{ matrix.suffix }}.exe" --self-test &
           pid=$!
+          timed_out=0
           for _ in $(seq 1 48); do
             kill -0 "$pid" 2>/dev/null || break
             sleep 5
           done
           if kill -0 "$pid" 2>/dev/null; then
+            timed_out=1
             echo "::error::self-test still running after 240s; report so far:"
             kill "$pid" 2>/dev/null || true
           fi
           wait "$pid" 2>/dev/null || true
           echo "----- self-test report -----"
           cat format_tex_gui_selftest.txt
+          # a killed (hung) run must not pass on the partial report
+          if [ "$timed_out" = "1" ]; then
+            echo "::error::self-test timed out and was killed"
+            exit 1
+          fi
           grep -q '^PASS' format_tex_gui_selftest.txt
           # Windows must actually host the native SysListView32, not the
           # Qt fallback: fail loudly if the native list did not activate.

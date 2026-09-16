@@ -1294,7 +1294,7 @@ class MainWindow(QMainWindow):
         """含子目录 state, from the native switch when available."""
         if has_native_switch():
             return native_switch_state()
-        return self.recursive_enabled()
+        return self.chk_recursive.isChecked()
 
     def self_test(self):
         """Assert the native window is visible, carries the 52 pt
@@ -2457,6 +2457,9 @@ class MainWindow(QMainWindow):
             note('checking native controls')
             ok = self._self_test_controls(note) and ok
 
+            note('checking win32 geometry (DPI)')
+            self._self_test_win32_geometry(note)
+
             menu_ok = bool(self.menuBar().actions())
             note('menu bar present: {}'.format(menu_ok))
             ok = ok and menu_ok
@@ -2535,6 +2538,63 @@ class MainWindow(QMainWindow):
             note('native encoding popup round-trip: {}'.format(popup_ok))
             ok = ok and popup_ok
         return ok
+
+    def _self_test_win32_geometry(self, note):
+        """DPI diagnostics: Qt's logical rect next to the Win32 device rects.
+
+        At 400% scaling the two coordinate spaces differ 4x, so logging both
+        (host client area vs. child window rect) makes a mis-sized or
+        off-screen hosted control obvious in the CI log. Windows only;
+        diagnostics never fail the run."""
+        if sys.platform != 'win32':
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.WinDLL('user32', use_last_error=True)
+            user32.GetClientRect.restype = wintypes.BOOL
+            user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.c_void_p]
+            user32.GetWindowRect.restype = wintypes.BOOL
+            user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.c_void_p]
+
+            def measure(hwnd, fn):
+                if not hwnd:
+                    return None
+                box = wintypes.RECT()
+                try:
+                    if fn(wintypes.HWND(hwnd), ctypes.byref(box)):
+                        return (box.right - box.left,
+                                box.bottom - box.top)
+                except Exception:
+                    pass
+                return None
+
+            def report(label, native):
+                slot = getattr(native, 'slot', None)
+                if slot is None:
+                    return
+                try:
+                    dpr = float(slot.devicePixelRatioF())
+                except Exception:
+                    dpr = 1.0
+                qrect = slot.rect()
+                note('win32 geometry {}: dpr {} qt {}x{} host client {} '
+                     'child window {}'.format(
+                         label, dpr, qrect.width(), qrect.height(),
+                         measure(getattr(native, '_host', None),
+                                 user32.GetClientRect),
+                         measure(getattr(native, '_hwnd', None),
+                                 user32.GetWindowRect)))
+
+            files = getattr(self.files_view, 'native', None)
+            if getattr(files, 'slot', None) is not None:
+                report('list', files)
+            for _slot, wrapper in self._option_widgets:
+                report('option', getattr(wrapper, 'native', wrapper))
+        except Exception as exc:
+            note('win32 geometry failed: {}: {}'.format(
+                type(exc).__name__, exc))
 
     def log_path(self):
         cwd = Path.cwd()
