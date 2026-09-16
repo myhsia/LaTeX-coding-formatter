@@ -715,7 +715,7 @@ class MainWindow(QMainWindow):
         slayout.setContentsMargins(12, int(band_height()) + 12, 12, 12)
         slayout.setSpacing(8)
 
-        # macOS-Settings-style grouped box: two rows with a hairline
+        # macOS-Settings-style grouped box: three rows with hairlines
         group = QFrame()
         group.setObjectName('group')
         group.setStyleSheet(
@@ -724,6 +724,14 @@ class MainWindow(QMainWindow):
         gv = QVBoxLayout(group)
         gv.setContentsMargins(10, 6, 10, 6)
         gv.setSpacing(0)
+
+        def row_separator():
+            sep = QFrame()
+            sep.setObjectName('rowsep')
+            sep.setFixedHeight(1)
+            sep.setStyleSheet(
+                '#rowsep { background: rgba(120, 120, 128, 0.28); }')
+            return sep
 
         ext_row = QHBoxLayout()
         ext_row.addWidget(QLabel('扩展名'))
@@ -734,13 +742,19 @@ class MainWindow(QMainWindow):
         ext_row.addWidget(self.ext_edit.qt)
         ext_row.addWidget(self.ext_edit.slot)
         gv.addLayout(ext_row)
+        gv.addWidget(row_separator())
 
-        rowsep = QFrame()
-        rowsep.setObjectName('rowsep')
-        rowsep.setFixedHeight(1)
-        rowsep.setStyleSheet(
-            '#rowsep { background: rgba(120, 120, 128, 0.28); }')
-        gv.addWidget(rowsep)
+        # the encoding selector lives in the sidebar, just after 扩展名
+        enc_row = QHBoxLayout()
+        enc_row.addWidget(QLabel('输入编码'))
+        enc_row.addStretch(1)
+        self.enc_out = PopUpControl(NativeMenuCombo(ENCODINGS, '同输入'),
+                                    ENCODINGS, '同输入', self,
+                                    custom_label=NativeMenuCombo.CUSTOM_LABEL)
+        enc_row.addWidget(self.enc_out.qt)
+        enc_row.addWidget(self.enc_out.slot)
+        gv.addLayout(enc_row)
+        gv.addWidget(row_separator())
 
         rec_row = QHBoxLayout()
         rec_row.addWidget(QLabel('含子目录'))
@@ -881,18 +895,6 @@ class MainWindow(QMainWindow):
         self.options_grid.setContentsMargins(0, 0, 0, 0)
         self._option_columns = 0
         layout.addLayout(self.options_grid)
-
-        enc = QHBoxLayout()
-        enc.addWidget(QLabel('输出编码'))
-        self.enc_out = PopUpControl(NativeMenuCombo(ENCODINGS, '同输入'),
-                                    ENCODINGS, '同输入', self,
-                                    custom_label=NativeMenuCombo.CUSTOM_LABEL)
-        enc.addWidget(self.enc_out.qt)
-        enc.addWidget(self.enc_out.slot)
-        enc.addWidget(QLabel('(输入编码自动检测; 输出默认同输入编码, '
-                             '也可输入任意编码名)'))
-        enc.addStretch(1)
-        layout.addLayout(enc)
 
         actions = QHBoxLayout()
         # no preview button: selecting an item in the file list previews

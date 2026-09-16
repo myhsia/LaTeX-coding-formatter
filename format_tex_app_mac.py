@@ -97,6 +97,16 @@ class MacApp:
             custom_label='其它')
         self.ext_popup.build()
 
+        # encoding popup, in the middle row of the same group
+        enc_host = AppKit.NSView.alloc().init()
+        enc_host.setFrame_(((0.0, 0.0), (100.0, 24.0)))
+        group.addSubview_(enc_host)
+        self.enc_host = enc_host
+        self.enc_popup = NativePopUpButton(
+            None, ViewTarget(enc_host), ENCODINGS, '同输入',
+            on_change=lambda value: None, custom_label='其它')
+        self.enc_popup.build()
+
         def label(text):
             field = AppKit.NSTextField.alloc().init()
             field.setBezeled_(False)
@@ -110,10 +120,14 @@ class MacApp:
             return field
 
         self.ext_label = label('扩展名')
+        self.enc_label = label('输入编码')
         self.switch_label = label('含子目录')
         self.group_separator = AppKit.NSBox.alloc().init()
         self.group_separator.setBoxType_(AppKit.NSBoxSeparator)
         group.addSubview_(self.group_separator)
+        self.group_separator2 = AppKit.NSBox.alloc().init()
+        self.group_separator2.setBoxType_(AppKit.NSBoxSeparator)
+        group.addSubview_(self.group_separator2)
 
         switch = AppKit.NSSwitch.alloc().init()
         # the smaller Settings-style toggle (Regular is 38x22, Small 32x18)
@@ -223,15 +237,7 @@ class MacApp:
             self.option_controls[key] = control
             self.option_hosts.append((slot, control))
 
-        # encoding popup + apply button
-        enc_slot = AppKit.NSView.alloc().init()
-        host.addSubview_(enc_slot)
-        self.enc_popup = NativePopUpButton(
-            None, ViewTarget(enc_slot), ENCODINGS, '同输入',
-            on_change=lambda value: None, custom_label='其它')
-        self.enc_popup.build()
-        self.enc_host = enc_slot
-
+        # apply button (the encoding popup now lives in the sidebar group)
         apply_slot = AppKit.NSView.alloc().init()
         host.addSubview_(apply_slot)
         self.apply_button = NativePushButton(
@@ -300,24 +306,35 @@ class MacApp:
 
             shell = self.shell
             sidebar = shell.sidebar_host.frame()
-            # group box contents: label-less rows, popup right, switch right
+            # group box contents: three rows, label left, control right
             group = self.shell.sidebar_group
             gb = group.bounds()
             row_h = 30.0
             top_row_y = gb.size.height - row_h - 2.0
+            mid_row_y = top_row_y - row_h
             bottom_row_y = 2.0
             self.group_separator.setFrame_(
-                ((10.0, bottom_row_y + row_h - 1.0),
+                ((10.0, top_row_y - 1.0),
+                 (gb.size.width - 20.0, 1.0)))
+            self.group_separator2.setFrame_(
+                ((10.0, mid_row_y - 1.0),
                  (gb.size.width - 20.0, 1.0)))
             self.ext_label.setFrameOrigin_((12.0, top_row_y + 6.0))
+            self.enc_label.setFrameOrigin_((12.0, mid_row_y + 6.0))
             self.switch_label.setFrameOrigin_((12.0, bottom_row_y + 7.0))
-            # extension popup (upper row, right aligned)
+            # extension popup (top row, right aligned)
             popup = self._popup_size()
             self.ext_host.setFrame_(
                 ((gb.size.width - 12.0 - popup[0], top_row_y + 3.0),
                  (popup[0], popup[1])))
             self.ext_popup.place()
-            # recursive switch (lower row, right aligned)
+            # encoding popup (middle row, right aligned)
+            enc = self.enc_popup.view.frame().size
+            self.enc_host.setFrame_(
+                ((gb.size.width - 12.0 - enc.width, mid_row_y + 3.0),
+                 (enc.width, enc.height)))
+            self.enc_popup.place()
+            # recursive switch (bottom row, right aligned)
             switch = self.switch.frame()
             self.switch.setFrameOrigin_(
                 (gb.size.width - 12.0 - switch.size.width,
@@ -337,8 +354,6 @@ class MacApp:
                                  (cell_w, cell_h)))
                 control.place()
             y = top - rows * cell_h - 8.0
-            self.enc_host.setFrame_(((0.0, y), (90.0, 26.0)))
-            self.enc_popup.place()
             self.apply_host.setFrame_(((width - 100.0, y), (100.0, 26.0)))
             self.apply_button.place()
             y -= 34.0

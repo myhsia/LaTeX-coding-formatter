@@ -204,7 +204,7 @@ class NativeShell:
         # sidebar contents: group at the top (below the band), then the
         # file list, then the footer row
         top = height - BAND_HEIGHT - 12.0
-        group_height = 64.0
+        group_height = 94.0        # three 30 pt rows + margins
         if self.sidebar_group is not None:
             self.sidebar_group.setFrame_(((12.0, top - group_height),
                                           (sidebar_width - 24.0,
