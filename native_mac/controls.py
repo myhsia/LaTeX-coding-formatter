@@ -404,6 +404,9 @@ class NativeLabel:
         if self.active and self.view is not None:
             self.view.setStringValue_(self._text)
             self.view.sizeToFit()
+            # keep the natural size in step so place() does not squeeze the
+            # view to a stale width after the text changes
+            self._natural = self.view.frame().size
 
     def text(self):
         return self._text

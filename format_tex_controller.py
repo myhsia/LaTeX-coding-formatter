@@ -9,7 +9,7 @@ drives the Qt widgets and the AppKit views:
     view.selected_entries() -> [(Path, Path | None), ...]
     view.append(text, tag)               # tag: 'add' | 'del' | 'meta' | None
     view.clear_output()
-    view.set_status(text)
+    view.set_status(text, encoding=None)   # encoding shown in the status bar
     view.options() -> FormatOptions
     view.check_only() -> bool            # the "仅检查" option
     view.confirm(count) -> bool          # ask before writing
@@ -87,8 +87,6 @@ class FormatController:
         write_errors = 0
         for e in results:
             header = '== {} =='.format(e['path'])
-            if e.get('read_enc'):
-                header += '  [检测编码: {}]'.format(e['read_enc'])
             self.view.append(header + '\n', None)
             if e['error']:
                 self.view.append('错误: {}\n\n'.format(e['error']), None)
@@ -139,5 +137,16 @@ class FormatController:
         unchanged = sum(1 for e in results
                         if not e['error'] and not e['changed'])
         suffix = '  [仅检查模式]' if check_only else ''
-        self.view.set_status('需修改: {}  已符合: {}  错误: {}{}'.format(
-            n_change, unchanged, errors, suffix))
+        # the status bar carries the encoding: one value when every selected
+        # file shares it, otherwise a generic label
+        encodings = {e['read_enc'] for e in results if e.get('read_enc')}
+        if len(encodings) == 1:
+            encoding = next(iter(encodings))
+        elif encodings:
+            encoding = '多种编码'
+        else:
+            encoding = None
+        self.view.set_status(
+            '需修改: {}  已符合: {}  错误: {}{}'.format(
+                n_change, unchanged, errors, suffix),
+            encoding=encoding)

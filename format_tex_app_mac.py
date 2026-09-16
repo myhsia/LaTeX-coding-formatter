@@ -50,6 +50,11 @@ class MacApp:
         self.option_controls = {}
         self.option_hosts = {}
         self.status = None
+        self.enc_status = None
+        self.enc_status_host = None
+        self.status_separator = None
+        self._status_region = None
+        self._status_encoding = False
         self.apply_button = None
         self.ext_popup = None
         self.enc_popup = None
@@ -257,6 +262,20 @@ class MacApp:
         self.diff.build()
         self.diff_host = diff_slot
 
+        # status bar: encoding label, a hairline divider, then the counts
+        enc_status_slot = AppKit.NSView.alloc().init()
+        host.addSubview_(enc_status_slot)
+        self.enc_status = NativeLabel(None, ViewTarget(enc_status_slot), '',
+                                      fill=False)
+        self.enc_status.build()
+        self.enc_status_host = enc_status_slot
+
+        self.status_separator = AppKit.NSView.alloc().init()
+        self.status_separator.setWantsLayer_(True)
+        self.status_separator.layer().setBackgroundColor_(
+            AppKit.NSColor.separatorColor().CGColor())
+        host.addSubview_(self.status_separator)
+
         status_slot = AppKit.NSView.alloc().init()
         host.addSubview_(status_slot)
         self.status = NativeLabel(None, ViewTarget(status_slot), '就绪',
@@ -362,11 +381,11 @@ class MacApp:
             self.apply_host.setFrame_(((width - apply_w, 0.0),
                                        (apply_w, apply_h)))
             self.apply_button.place()
-            # status label on the same bottom row, left of the button
-            self.status_host.setFrame_(
-                ((0.0, (bottom - status_h) / 2.0),
-                 (max(1.0, width - apply_w - 12.0), status_h)))
-            self.status.place()
+            # status row on the left of the button: encoding, divider, counts
+            self._status_region = (
+                0.0, (bottom - status_h) / 2.0,
+                max(1.0, width - apply_w - 12.0), status_h)
+            self._place_status()
             self.diff_host.setFrame_(
                 ((0.0, bottom + 8.0),
                  (width, max(1.0, y - bottom - 8.0))))
@@ -415,9 +434,42 @@ class MacApp:
         if self.diff is not None:
             self.diff.clear()
 
-    def set_status(self, text):
+    def set_status(self, text, encoding=None):
         if self.status is not None:
             self.status.setText(text)
+        if self.enc_status is not None:
+            self.enc_status.setText(encoding or '')
+        self._status_encoding = bool(encoding)
+        self._place_status()
+
+    def _place_status(self):
+        """Lay the status row out: [encoding] 8 [divider] 8 [counts]."""
+        region = self._status_region
+        if region is None or self.status is None:
+            return
+        x, y, width, height = region
+        show = bool(self._status_encoding) and self.enc_status is not None
+        if self.enc_status_host is not None:
+            self.enc_status_host.setHidden_(not show)
+        if self.status_separator is not None:
+            self.status_separator.setHidden_(not show)
+        if show:
+            enc_width = min(max(self.enc_status.size()[0], 1.0), width)
+            self.enc_status_host.setFrame_(((x, y), (enc_width, height)))
+            sep_x = x + enc_width + 8.0
+            self.status_separator.setFrame_(
+                ((sep_x, y + (height - 16.0) / 2.0), (1.0, 16.0)))
+            status_x = sep_x + 9.0
+            status_width = max(1.0, width - (status_x - x))
+        else:
+            status_x, status_width = x, width
+        self.status_host.setFrame_(((status_x, y), (status_width, height)))
+        for label in (self.enc_status, self.status):
+            if label is not None:
+                try:
+                    label.place()
+                except Exception:
+                    pass
 
     def options_for_run(self):
         return FormatOptions(
@@ -802,6 +854,15 @@ def run_self_test(app):
                    ._layoutPrefersCenterAlignment() is False)
         lines.append('confirm alert left-aligns its text: {}'.format(left_ok))
         ok = ok and left_ok
+
+        # the status bar carries the encoding behind a hairline divider
+        app.set_status('测试', encoding='GBK')
+        enc_ok = app.enc_status.text() == 'GBK' and app.enc_status.isVisible()
+        app.set_status('就绪')
+        enc_ok = enc_ok and not app.enc_status.isVisible()
+        lines.append('status bar encoding segment shown then hidden: '
+                     '{}'.format(enc_ok))
+        ok = ok and enc_ok
 
         # --- interactive regressions -------------------------------------
         # every native control's action must be implemented by its target,

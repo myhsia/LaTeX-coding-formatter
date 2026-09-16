@@ -913,6 +913,19 @@ class MainWindow(QMainWindow):
 
         # bottom row: status on the left, 应用格式化 in the south-east corner
         # (no preview button: selecting a list item previews its diff)
+        self.enc_status_label = QLabel('')
+        self.enc_status_label.setObjectName('enclabel')
+        self.enc_status_label.setStyleSheet(
+            '#enclabel {{ color: {}; padding-top: 2px; }}'.format(
+                self.palette().color(QPalette.ColorRole.WindowText).name()))
+        self.enc_status_label.setVisible(False)
+        self.status_separator = QFrame()
+        self.status_separator.setObjectName('statussep')
+        self.status_separator.setFixedWidth(1)
+        self.status_separator.setFixedHeight(16)
+        self.status_separator.setStyleSheet(
+            '#statussep { background: rgba(120, 120, 128, 0.28); }')
+        self.status_separator.setVisible(False)
         self.status_label = LabelControl(QLabel('就绪'), '就绪', self)
         self.status_label.qt.setObjectName('statuslabel')
         self.status_label.qt.setStyleSheet(
@@ -924,6 +937,8 @@ class MainWindow(QMainWindow):
         self.btn_apply.qt.clicked.connect(lambda: self.run(write=True))
         bottom = QHBoxLayout()
         bottom.setContentsMargins(0, 0, 0, 0)
+        bottom.addWidget(self.enc_status_label)
+        bottom.addWidget(self.status_separator)
         bottom.addWidget(self.status_label.qt)
         bottom.addWidget(self.status_label.slot)
         bottom.addStretch(1)
@@ -957,10 +972,15 @@ class MainWindow(QMainWindow):
             self.apply_window_effects()
         return super().event(ev)
 
-    def set_status(self, text):
+    def set_status(self, text, encoding=None):
         """Update the status line (lives at the bottom of the content
-        panel so the sidebar can run the full window height)."""
+        panel so the sidebar can run the full window height). ``encoding``,
+        when given, is shown before the text behind a hairline divider."""
         self.status_label.setText(text)
+        has_encoding = bool(encoding)
+        self.enc_status_label.setText(encoding or '')
+        self.enc_status_label.setVisible(has_encoding)
+        self.status_separator.setVisible(has_encoding)
 
     def _splitter_moved(self, *_args):
         self._sync_sidebar_width()
@@ -2380,6 +2400,16 @@ class MainWindow(QMainWindow):
             note('confirm() returns True with backups on (no dialog): '
                  '{}'.format(confirm_ok))
             ok = ok and confirm_ok
+
+            # the status bar carries the encoding behind a hairline divider
+            self.set_status('测试', encoding='GBK')
+            enc_ok = (self.enc_status_label.text() == 'GBK'
+                      and self.enc_status_label.isVisible())
+            self.set_status('就绪')
+            enc_ok = enc_ok and not self.enc_status_label.isVisible()
+            note('status bar encoding segment shown then hidden: {}'.format(
+                enc_ok))
+            ok = ok and enc_ok
 
             note('checking native controls')
             ok = self._self_test_controls(note) and ok
