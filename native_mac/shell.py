@@ -30,6 +30,8 @@ FOOTER_HEIGHT = 24.0
 SIDEBAR_WIDTH = 240.0
 SIDEBAR_MIN = 180.0
 WINDOW_MIN = (760.0, 560.0)
+# macOS default window content margin (20 pt)
+WINDOW_MARGIN = 20.0
 
 
 class NativeShell:
@@ -203,16 +205,17 @@ class NativeShell:
 
         # sidebar contents: group at the top (below the band), then the
         # file list, then the footer row
-        top = height - BAND_HEIGHT - 12.0
+        margin = WINDOW_MARGIN
+        top = height - BAND_HEIGHT - margin
         group_height = 94.0        # three 30 pt rows + margins
         if self.sidebar_group is not None:
-            self.sidebar_group.setFrame_(((12.0, top - group_height),
-                                          (sidebar_width - 24.0,
-                                           group_height)))
+            self.sidebar_group.setFrame_(
+                ((margin, top - group_height),
+                 (max(1.0, sidebar_width - 2 * margin), group_height)))
         self.sidebar_host.setFrame_(
-            ((0.0, FOOTER_HEIGHT),
-             (sidebar_width, max(1.0, top - group_height - 12.0
-                                 - FOOTER_HEIGHT))))
+            ((margin, FOOTER_HEIGHT),
+             (max(1.0, sidebar_width - 2 * margin),
+              max(1.0, top - group_height - margin - FOOTER_HEIGHT))))
         self.footer_host.setFrame_(((0.0, 0.0),
                                     (sidebar_width, FOOTER_HEIGHT)))
         self.footer_separator.setFrame_(((0.0, FOOTER_HEIGHT),
@@ -220,8 +223,9 @@ class NativeShell:
 
         # content: the strip occupies the top, the rest is the panel host
         self.content_host.setFrame_(
-            ((12.0, 12.0), (max(1.0, panel_width - 24.0),
-                            max(1.0, height - BAND_HEIGHT - 24.0))))
+            ((margin, margin),
+             (max(1.0, panel_width - 2 * margin),
+              max(1.0, height - BAND_HEIGHT - 2 * margin))))
 
         self._align_chrome(sidebar_width)
         if callable(self.on_layout):

@@ -120,7 +120,7 @@ class MacApp:
             return field
 
         self.ext_label = label('扩展名')
-        self.enc_label = label('输入编码')
+        self.enc_label = label('输出编码')
         self.switch_label = label('含子目录')
         self.group_separator = AppKit.NSBox.alloc().init()
         self.group_separator.setBoxType_(AppKit.NSBoxSeparator)
@@ -353,15 +353,23 @@ class MacApp:
                 _slot.setFrame_(((column * cell_w, top - row * cell_h),
                                  (cell_w, cell_h)))
                 control.place()
-            y = top - rows * cell_h - 8.0
-            self.apply_host.setFrame_(((width - 100.0, y), (100.0, 26.0)))
-            self.apply_button.place()
-            y -= 34.0
+            y = top - rows * cell_h - 8.0          # top of the diff area
             status_h = 20.0
-            self.status_host.setFrame_(((0.0, 0.0), (width, status_h)))
+            apply_w = 100.0
+            apply_h = 26.0
+            bottom = max(apply_h, status_h)
+            # apply button in the south-east corner of the content
+            self.apply_host.setFrame_(((width - apply_w, 0.0),
+                                       (apply_w, apply_h)))
+            self.apply_button.place()
+            # status label on the same bottom row, left of the button
+            self.status_host.setFrame_(
+                ((0.0, (bottom - status_h) / 2.0),
+                 (max(1.0, width - apply_w - 12.0), status_h)))
             self.status.place()
             self.diff_host.setFrame_(
-                ((0.0, status_h + 6.0), (width, max(1.0, y - status_h - 6.0))))
+                ((0.0, bottom + 8.0),
+                 (width, max(1.0, y - bottom - 8.0))))
             self.diff.place()
 
             if self.list is not None:
@@ -428,14 +436,24 @@ class MacApp:
         return self.option_controls['check'].isChecked()
 
     def confirm(self, count):
+        # a backup makes the write recoverable, so only warn without one
+        if self.option_controls['backup'].isChecked():
+            return True
         import AppKit
 
         alert = AppKit.NSAlert.alloc().init()
-        alert.setMessageText_('确认')
-        alert.setInformativeText_(
-            '将修改 {} 个文件, 是否继续?'.format(count))
-        alert.addButtonWithTitle_('继续')
-        alert.addButtonWithTitle_('取消')
+        alert.setAlertStyle_(AppKit.NSAlertStyleWarning)
+        alert.setMessageText_(
+            '未启用备份, 将直接修改 {} 个文件'.format(count))
+        alert.setInformativeText_('此操作不可撤销')
+        # first button -> right; destructive (red) and not the Return
+        # default (no key equivalent), so it needs an explicit click
+        destructive = alert.addButtonWithTitle_('确认')
+        destructive.setHasDestructiveAction_(True)
+        destructive.setKeyEquivalent_('')
+        # second button -> left; Esc dismisses the alert (cancel)
+        cancel = alert.addButtonWithTitle_('取消')
+        cancel.setKeyEquivalent_('\x1b')
         return alert.runModal() == 1000
 
     # ---------- actions ----------
@@ -735,6 +753,22 @@ def run_self_test(app):
         lines.append('recursive switch uses the small control size: '
                      '{}'.format(switch_small))
         ok = ok and switch_small
+
+        # 应用格式化 sits in the content's south-east corner
+        content = app.shell.content_host.bounds()
+        button = app.apply_host.frame()
+        se_ok = (abs((button.origin.x + button.size.width)
+                     - content.size.width) < 1.5
+                 and abs(button.origin.y) < 1.5)
+        lines.append('apply button in the south-east corner: {}'.format(se_ok))
+        ok = ok and se_ok
+
+        # no confirm prompt while backups are enabled (the dialog only
+        # appears without a backup, which the tests never trigger)
+        confirm_ok = app.confirm(3) is True
+        lines.append('confirm() returns True with backups on (no dialog): '
+                     '{}'.format(confirm_ok))
+        ok = ok and confirm_ok
 
         # --- interactive regressions -------------------------------------
         # every native control's action must be implemented by its target,

@@ -712,7 +712,7 @@ class MainWindow(QMainWindow):
         sidebar.setObjectName('sidebar')
         sidebar.setStyleSheet('#sidebar { background: transparent; }')
         slayout = QVBoxLayout(sidebar)
-        slayout.setContentsMargins(12, int(band_height()) + 12, 12, 12)
+        slayout.setContentsMargins(20, int(band_height()) + 20, 20, 20)
         slayout.setSpacing(8)
 
         # macOS-Settings-style grouped box: three rows with hairlines
@@ -746,7 +746,7 @@ class MainWindow(QMainWindow):
 
         # the encoding selector lives in the sidebar, just after 扩展名
         enc_row = QHBoxLayout()
-        enc_row.addWidget(QLabel('输入编码'))
+        enc_row.addWidget(QLabel('输出编码'))
         enc_row.addStretch(1)
         self.enc_out = PopUpControl(NativeMenuCombo(ENCODINGS, '同输入'),
                                     ENCODINGS, '同输入', self,
@@ -857,7 +857,7 @@ class MainWindow(QMainWindow):
         pv = QVBoxLayout(panel)
         # no hairline: the frosted strip over this surface is separated
         # from the content below only by the material (Finder-style)
-        pv.setContentsMargins(12, int(band_height()) + 12, 12, 12)
+        pv.setContentsMargins(20, int(band_height()) + 20, 20, 20)
         pv.setSpacing(8)
         layout = pv
         splitter.addWidget(panel)
@@ -896,18 +896,6 @@ class MainWindow(QMainWindow):
         self._option_columns = 0
         layout.addLayout(self.options_grid)
 
-        actions = QHBoxLayout()
-        # no preview button: selecting an item in the file list previews
-        # its diff automatically, and "应用格式化" writes the selection
-        self.btn_apply = ButtonControl(
-            QPushButton('应用格式化'), '应用格式化', self,
-            on_click=lambda: self.run(write=True))
-        self.btn_apply.qt.clicked.connect(lambda: self.run(write=True))
-        actions.addWidget(self.btn_apply.qt)
-        actions.addWidget(self.btn_apply.slot)
-        actions.addStretch(1)
-        layout.addLayout(actions)
-
         self.output = QPlainTextEdit()
         self.output.setReadOnly(True)
         self.output.setFont(QFontDatabase.systemFont(
@@ -923,13 +911,25 @@ class MainWindow(QMainWindow):
             setattr(self, 'fmt_' + tag, fmt)
         layout.addWidget(self.output, 1)
 
+        # bottom row: status on the left, 应用格式化 in the south-east corner
+        # (no preview button: selecting a list item previews its diff)
         self.status_label = LabelControl(QLabel('就绪'), '就绪', self)
         self.status_label.qt.setObjectName('statuslabel')
         self.status_label.qt.setStyleSheet(
             '#statuslabel {{ color: {}; padding-top: 2px; }}'.format(
                 self.palette().color(QPalette.ColorRole.WindowText).name()))
-        layout.addWidget(self.status_label.qt)
-        layout.addWidget(self.status_label.slot)
+        self.btn_apply = ButtonControl(
+            QPushButton('应用格式化'), '应用格式化', self,
+            on_click=lambda: self.run(write=True))
+        self.btn_apply.qt.clicked.connect(lambda: self.run(write=True))
+        bottom = QHBoxLayout()
+        bottom.setContentsMargins(0, 0, 0, 0)
+        bottom.addWidget(self.status_label.qt)
+        bottom.addWidget(self.status_label.slot)
+        bottom.addStretch(1)
+        bottom.addWidget(self.btn_apply.qt)
+        bottom.addWidget(self.btn_apply.slot)
+        layout.addLayout(bottom)
 
         self.effect_note = None
         self._effects_applied = False
@@ -978,9 +978,9 @@ class MainWindow(QMainWindow):
         # larger of the hint and the real width
         widest = max(max(chk.width(), chk.sizeHint().width())
                      for chk in self.option_checks)
-        available = self.content_panel.width() - 24      # panel margins
+        available = self.content_panel.width() - 40      # panel margins
         if available <= 0:
-            available = self.width() - self.sidebar.width() - 24
+            available = self.width() - self.sidebar.width() - 40
         need_three = widest * 3 + spacing * 2 + 16
         columns = 3 if available >= need_three else 2
         if columns != self._option_columns:
@@ -1158,9 +1158,9 @@ class MainWindow(QMainWindow):
             # no title bar in full screen - drop the transparent strip
             full = bool(self.windowState() & Qt.WindowState.WindowFullScreen)
             top = 0 if full else int(band_height())
-            self.sidebar.layout().setContentsMargins(12, top + 12, 12, 12)
+            self.sidebar.layout().setContentsMargins(20, top + 20, 20, 20)
             self.content_panel.layout().setContentsMargins(
-                12, top + 12, 12, 12)
+                20, top + 20, 20, 20)
             self._sync_sidebar_width()
             self._reflow_options()
             self._reapply_materials()
@@ -2375,6 +2375,12 @@ class MainWindow(QMainWindow):
             note('option controls consistent: {}'.format(opts_ok))
             ok = ok and opts_ok
 
+            # with backups on the (destructive) confirm is skipped entirely
+            confirm_ok = self.confirm(3) is True
+            note('confirm() returns True with backups on (no dialog): '
+                 '{}'.format(confirm_ok))
+            ok = ok and confirm_ok
+
             note('checking native controls')
             ok = self._self_test_controls(note) and ok
 
@@ -2685,9 +2691,20 @@ class MainWindow(QMainWindow):
         return self.chk_check.isChecked()
 
     def confirm(self, count):
-        return QMessageBox.question(
-            self, '确认', '将修改 {} 个文件, 是否继续?'.format(count)) \
-            == QMessageBox.StandardButton.Yes
+        # a backup makes the write recoverable, so only warn without one
+        if self.chk_backup.isChecked():
+            return True
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText('未启用备份, 将直接修改 {} 个文件'.format(count))
+        box.setInformativeText('此操作不可撤销')
+        destructive = box.addButton(
+            '确认', QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton('取消', QMessageBox.ButtonRole.RejectRole)
+        for button in box.buttons():
+            button.setAutoDefault(False)          # Return triggers nothing
+        box.exec()
+        return box.clickedButton() is destructive
 
     # ---------- actions (delegating to the controller) ----------
     def _run(self, write, confirm=True):
