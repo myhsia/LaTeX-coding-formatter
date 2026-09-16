@@ -60,6 +60,7 @@ _CLICK_THROUGH_CLASS = None
 _PLUS_MINUS = None
 _PLUS_MINUS_TARGET = None
 _PLUS_MINUS_TARGET_CLASS = None
+_PLUS_MINUS_SEPARATOR = None
 _FOOTER_VIEW = None
 _FOOTER_SLOT = None
 _FOOTER_ROW = None
@@ -526,7 +527,7 @@ def create_native_plus_minus(window, on_add, on_remove):
     between the cells), so no separate separator is needed.
 
     Returns True on success; callers keep the Qt buttons otherwise."""
-    global _PLUS_MINUS, _PLUS_MINUS_TARGET
+    global _PLUS_MINUS, _PLUS_MINUS_TARGET, _PLUS_MINUS_SEPARATOR
     if sys.platform != 'darwin':
         return False
     try:
@@ -548,17 +549,24 @@ def create_native_plus_minus(window, on_add, on_remove):
                 control.setImage_forSegment_(image, index)
             control.setTarget_(target)
             control.setAction_(b'segmentClicked:')
+            control.setBordered_(False)   # glyphs + our divider, no box
             control.sizeToFit()
+            separator = AppKit.NSView.alloc().init()
+            separator.setWantsLayer_(True)
+            separator.layer().setBackgroundColor_(
+                AppKit.NSColor.separatorColor().CGColor())
             _PLUS_MINUS, _PLUS_MINUS_TARGET = control, target
+            _PLUS_MINUS_SEPARATOR = separator
 
         qt_view = objc.objc_object(c_void_p=int(window.winId()))
         theme = qt_view.superview()
-        try:
-            _PLUS_MINUS.removeFromSuperview()
-        except Exception:
-            pass
-        theme.addSubview_positioned_relativeTo_(_PLUS_MINUS,
-                                               AppKit.NSWindowAbove, qt_view)
+        for view in (_PLUS_MINUS, _PLUS_MINUS_SEPARATOR):
+            try:
+                view.removeFromSuperview()
+            except Exception:
+                pass
+            theme.addSubview_positioned_relativeTo_(
+                view, AppKit.NSWindowAbove, qt_view)
         _PLUS_MINUS.sizeToFit()
         return True
     except Exception as exc:
@@ -585,21 +593,27 @@ def place_native_plus_minus(window, slot):
                 (float(slot.width()), float(slot.height())))
         target = qt_view.convertRect_toView_(rect, theme)
         size = _PLUS_MINUS.frame().size
-        x = target.origin.x + FOOTER_INSET
-        y = target.origin.y + (target.size.height - size.height) / 2.0
-        y = max(target.origin.y,
-                min(y, target.origin.y + target.size.height - size.height))
+        # flush in the bottom-left corner of the bar
+        x = target.origin.x
+        y = target.origin.y
         # the Qt row can differ from the band by the frame's border width,
         # so clamp the control into the band itself: it must never poke
         # out of the footer (or the frame)
         if _FOOTER_VIEW is not None:
             band = _FOOTER_VIEW.frame()
-            x = max(band.origin.x + 1.0,
-                    min(x, band.origin.x + band.size.width - size.width - 1.0))
+            x = max(band.origin.x,
+                    min(x, band.origin.x + band.size.width - size.width))
             y = max(band.origin.y,
                     min(y, band.origin.y + band.size.height - size.height))
         _PLUS_MINUS.setFrame_(((x, y), (size.width, size.height)))
         _PLUS_MINUS.setHidden_(slot.isVisible() is False)
+        if _PLUS_MINUS_SEPARATOR is not None:
+            divider_h = max(1.0, size.height - 6.0)
+            _PLUS_MINUS_SEPARATOR.setFrame_(
+                ((x + size.width / 2.0 - 0.5,
+                  y + (size.height - divider_h) / 2.0),
+                 (1.0, divider_h)))
+            _PLUS_MINUS_SEPARATOR.setHidden_(slot.isVisible() is False)
     except Exception as exc:
         _note('+/- placement failed: {}: {}'.format(type(exc).__name__, exc))
 

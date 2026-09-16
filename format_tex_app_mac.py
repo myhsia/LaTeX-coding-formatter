@@ -64,6 +64,7 @@ class MacApp:
         self.enc_popup = None
         self.switch = None
         self.plus_minus = None
+        self.pm_separator = None
         self.strip = None
         self.footer_tint = None
         self._confirm_ok = False
@@ -214,6 +215,7 @@ class MacApp:
         for index, name in enumerate(('NSAddTemplate', 'NSRemoveTemplate')):
             control.setImage_forSegment_(AppKit.NSImage.imageNamed_(name),
                                          index)
+        control.setBordered_(False)       # no box: glyphs + our divider only
         control.sizeToFit()
         global _PlusMinusTarget
         if _PlusMinusTarget is None:
@@ -224,6 +226,13 @@ class MacApp:
         control.setAction_(b'clicked:')
         footer.addSubview_(control)
         self.plus_minus = control
+        # a hairline between the + and - segments (the borderless control
+        # draws none), matching the Settings-style bar
+        self.pm_separator = AppKit.NSView.alloc().init()
+        self.pm_separator.setWantsLayer_(True)
+        self.pm_separator.layer().setBackgroundColor_(
+            AppKit.NSColor.separatorColor().CGColor())
+        footer.addSubview_(self.pm_separator)
 
     def _build_content(self, AppKit):
         host = self.shell.content_host
@@ -432,9 +441,14 @@ class MacApp:
             self.footer_tint.setFrame_(footer)
             control = self.plus_minus
             size = control.frame().size
-            self.plus_minus.setFrame_(
-                ((10.0, (footer.size.height - size.height) / 2.0),
-                 (size.width, size.height)))
+            # flush in the window's bottom-left corner
+            self.plus_minus.setFrame_(((0.0, 0.0), (size.width, size.height)))
+            # hairline between the + and - segments, vertically centred
+            divider_h = max(1.0, size.height - 6.0)
+            self.pm_separator.setFrame_(
+                ((size.width / 2.0 - 0.5,
+                  (footer.size.height - divider_h) / 2.0),
+                 (1.0, divider_h)))
             self.update_remove_enabled()
         except Exception:
             self.show_error(traceback.format_exc())
@@ -809,6 +823,15 @@ def run_self_test(app):
         ok = ok and (app.plus_minus.segmentCount() == 2
                      and app.plus_minus.segmentStyle()
                      == AppKit.NSSegmentStyleSmallSquare)
+
+        control = app.plus_minus.frame()
+        pm_ok = (not app.plus_minus.isBordered()
+                 and app.pm_separator is not None
+                 and abs(control.origin.x) < 1.0
+                 and abs(control.origin.y) < 1.0)
+        lines.append('+/- borderless (no box) with a divider, flush at the '
+                     'bottom-left: {}'.format(pm_ok))
+        ok = ok and pm_ok
 
         # titlebar chrome (traffic lights + our own title label) centred
         app.shell.layout()
