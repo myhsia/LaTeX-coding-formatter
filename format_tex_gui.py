@@ -706,7 +706,8 @@ class MainWindow(QMainWindow):
 
         # --- left: sidebar (file list over the shared blur) ---
         sidebar = QWidget()
-        sidebar.setMinimumWidth(180)
+        # Settings-style fixed sidebar width (the splitter cannot resize it)
+        sidebar.setFixedWidth(232)
         # explicit transparency: the sidebar shows the native material
         # behind it (and makes the intent testable)
         sidebar.setObjectName('sidebar')
@@ -860,7 +861,7 @@ class MainWindow(QMainWindow):
         splitter.addWidget(panel)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([240, 740])
+        splitter.setSizes([232, 740])
         splitter.splitterMoved.connect(self._splitter_moved)
         self.content_panel = panel
         panel.installEventFilter(self)
@@ -2175,7 +2176,9 @@ class MainWindow(QMainWindow):
             self.resize(1200, 700)
             QApplication.processEvents()
             wide_rows, wide_cols, wide_w = option_layout()
-            self.splitter.setSizes([720, 480])       # squeeze the panel
+            # the sidebar is a fixed width now, so squeeze the panel by
+            # narrowing the window (the splitter can no longer resize it)
+            self.resize(658, 700)
             QApplication.processEvents()
             narrow_rows, narrow_cols, narrow_w = option_layout()
             equal = (max(wide_w) - min(wide_w) <= 1
@@ -2190,7 +2193,7 @@ class MainWindow(QMainWindow):
                              no_heading, wide_rows, wide_cols,
                              narrow_rows, narrow_cols, equal, options_ok))
             ok = ok and options_ok
-            self.splitter.setSizes([240, 740])
+            self.resize(1200, 700)
             QApplication.processEvents()
 
             # --- menus: native NSMenu on macOS, Qt menu bar elsewhere ---

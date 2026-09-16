@@ -27,8 +27,9 @@ from platform_effects import (band_height, center_titlebar_in_band,
 
 BAND_HEIGHT = 52.0
 FOOTER_HEIGHT = 24.0
-SIDEBAR_WIDTH = 240.0
-SIDEBAR_MIN = 180.0
+# Settings-style fixed sidebar width (dragging is disabled)
+SIDEBAR_WIDTH = 232.0
+SIDEBAR_MIN = 232.0
 WINDOW_MIN = (760.0, 560.0)
 # macOS default window content margin (20 pt)
 WINDOW_MARGIN = 20.0
@@ -353,6 +354,13 @@ def _split_class():
                     AppKit.NSRectFill(rect)
                 except Exception:
                     pass
+
+            def constrainSplitPosition_ofSubviewAt_(self, position, divider):
+                # fixed sidebar width: the divider cannot be dragged
+                return SIDEBAR_WIDTH
+
+            def canCollapseSubview_(self, subview):
+                return False
 
         _SPLIT_CLASS = _Split
     return _SPLIT_CLASS

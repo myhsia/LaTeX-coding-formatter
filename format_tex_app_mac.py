@@ -847,6 +847,17 @@ def run_self_test(app):
                      '134 pt): {}'.format(rows_ok))
         ok = ok and rows_ok
 
+        # the sidebar is a fixed 232 pt (dragging is disabled)
+        try:
+            drag_off = (app.shell.split.constrainSplitPosition_ofSubviewAt_(
+                999.0, 0) == 232.0)
+        except Exception:
+            drag_off = False
+        sidebar_ok = abs(app.shell.sidebar_width() - 232.0) < 0.5 and drag_off
+        lines.append('sidebar fixed at 232 pt, drag disabled: {}'.format(
+            sidebar_ok))
+        ok = ok and sidebar_ok
+
         # titlebar chrome (traffic lights + our own title label) centred
         app.shell.layout()
         win = app.shell.window
