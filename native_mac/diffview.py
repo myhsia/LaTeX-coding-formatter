@@ -17,6 +17,30 @@ Usage
 import sys
 from pathlib import Path
 
+# the diff pane's monospace font and the code column width it must fit
+DIFF_FONT_SIZE = 12.0
+CODE_COLUMNS = 80
+
+
+def diff_font():
+    import AppKit
+
+    return AppKit.NSFont.monospacedSystemFontOfSize_weight_(
+        DIFF_FONT_SIZE, AppKit.NSFontWeightRegular)
+
+
+def char_advance():
+    """Width of one monospace cell in the diff font (points)."""
+    import AppKit
+
+    sample = AppKit.NSAttributedString.alloc().initWithString_attributes_(
+        'M', {AppKit.NSFontAttributeName: diff_font()})
+    return float(sample.size().width)
+
+
+def code_column_width(columns=CODE_COLUMNS):
+    return char_advance() * columns
+
 
 def _ns_color(AppKit, value):
     """NSColor from '#rrggbb' (or None)."""
@@ -43,6 +67,7 @@ class NativeDiffView:
         self._scroll = None
         self._view = None
         self._font = None
+        self._style = None
         self._colours = {}
 
     @staticmethod
@@ -60,8 +85,12 @@ class NativeDiffView:
             import platform_effects as pe
 
             if self._scroll is None:
-                font = AppKit.NSFont.monospacedSystemFontOfSize_weight_(
-                    12.0, AppKit.NSFontWeightRegular)
+                font = diff_font()
+                # hanging indent: the +/-/space marker hangs in the left
+                # gutter, the code column aligns one cell to its right
+                style = AppKit.NSMutableParagraphStyle.alloc().init()
+                style.setFirstLineHeadIndent_(0.0)
+                style.setHeadIndent_(char_advance())
                 view = AppKit.NSTextView.alloc().initWithFrame_(
                     ((0.0, 0.0), (400.0, 300.0)))
                 view.setRichText_(True)
@@ -69,6 +98,7 @@ class NativeDiffView:
                 view.setSelectable_(True)
                 view.setDrawsBackground_(False)
                 view.setFont_(font)
+                view.setDefaultParagraphStyle_(style)
                 view.setTextContainerInset_((0.0, 4.0))
                 view.setVerticallyResizable_(True)
                 view.setHorizontallyResizable_(False)
@@ -77,8 +107,10 @@ class NativeDiffView:
                 container = view.textContainer()
                 if container is not None:
                     container.setWidthTracksTextView_(True)
+                    container.setLineFragmentPadding_(0.0)
                 view.setMinSize_((0.0, 0.0))
                 view.setMaxSize_((1.0e7, 1.0e7))
+                self._style = style
 
                 scroll = AppKit.NSScrollView.alloc().init()
                 scroll.setDocumentView_(view)
@@ -114,6 +146,13 @@ class NativeDiffView:
         try:
             rect = self._target.rect()
             self._scroll.setFrame_((rect.origin, rect.size))
+            # the text view must track the clip's width so the code column
+            # wraps at the pane, not at a stale size
+            view = self._view
+            if view is not None:
+                width = self._scroll.contentView().bounds().size.width
+                height = view.frame().size.height
+                view.setFrame_(((0.0, 0.0), (width, height)))
             self._scroll.setHidden_(not self._target.visible())
         except Exception:
             pass
@@ -132,6 +171,8 @@ class NativeDiffView:
         attributes = {}
         if self._font is not None:
             attributes[AppKit.NSFontAttributeName] = self._font
+        if self._style is not None:
+            attributes[AppKit.NSParagraphStyleAttributeName] = self._style
         colour = self._colours.get(tag) if tag else None
         if colour is not None:
             attributes[AppKit.NSForegroundColorAttributeName] = colour

@@ -76,9 +76,17 @@ class MacApp:
         import AppKit
 
         from format_tex_theme import native_dark, palette
+        from native_mac import diffview
+        from native_mac.shell import SIDEBAR_WIDTH
         self.dark = native_dark()
         self.colours = palette(self.dark)
-        if not self.shell.build():
+        # fixed width so the diff pane fits exactly CODE_COLUMNS monospace
+        # cells (plus the one-cell marker gutter, in the left margin)
+        import math
+
+        width = math.ceil(SIDEBAR_WIDTH + 1.0 + 2 * 20.0
+                          + diffview.code_column_width())
+        if not self.shell.build(width=float(width)):
             import platform_effects as pe
             print('shell build failed: {}'.format(pe.notes()[-3:]),
                   file=sys.stderr)
@@ -417,9 +425,16 @@ class MacApp:
                 0.0, (bottom - status_h) / 2.0,
                 max(1.0, width - apply_w - 12.0), status_h)
             self._place_status()
+            # the diff pane extends one cell left of the content column so
+            # the +/-/space marker hangs in the gutter (code aligns at 0)
+            try:
+                from native_mac import diffview as _diffview
+                gutter = _diffview.char_advance()
+            except Exception:
+                gutter = 0.0
             self.diff_host.setFrame_(
-                ((0.0, bottom + 8.0),
-                 (width, max(1.0, y - bottom - 8.0))))
+                ((-gutter, bottom + 8.0),
+                 (width + gutter, max(1.0, y - bottom - 8.0))))
             self.diff.place()
 
             if self.list is not None:
@@ -856,6 +871,22 @@ def run_self_test(app):
         lines.append('sidebar fixed at 232 pt, drag disabled: {}'.format(
             sidebar_ok))
         ok = ok and sidebar_ok
+
+        # fixed window width: the diff pane fits exactly 80 monospace cells
+        import math
+
+        from native_mac import diffview as _diffview
+
+        expected = math.ceil(232.0 + 1.0 + 40.0
+                             + _diffview.code_column_width())
+        win_w = app.shell.window.frame().size.width
+        max_w = app.shell.window.maxSize().width
+        content_w = app.shell.content_host.frame().size.width
+        width_ok = (abs(win_w - expected) < 0.5 and abs(max_w - expected) < 1.0
+                    and content_w >= _diffview.code_column_width() - 1.0)
+        lines.append('fixed width fits 80 monospace cells ({:.0f} pt): '
+                     '{}'.format(win_w, width_ok))
+        ok = ok and width_ok
 
         # titlebar chrome (traffic lights + our own title label) centred
         app.shell.layout()

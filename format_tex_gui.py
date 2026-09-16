@@ -972,6 +972,21 @@ class MainWindow(QMainWindow):
         self.controller = FormatController(self)
         # menus last: creating the menu bar triggers window events
         self._build_menus()
+        # fixed width so the diff pane fits CODE_COLUMNS monospace cells
+        # (plus the one-cell marker gutter, in the left margin); only the
+        # height can resize
+        try:
+            import math
+
+            from PySide6.QtGui import QFontMetricsF
+
+            advance = QFontMetricsF(
+                self.output.font()).horizontalAdvance('M')
+            self.setFixedWidth(math.ceil(232 + 40 + 80 * advance))
+            self.setWindowFlag(
+                Qt.WindowType.MSWindowsFixedSizeDialogHint, True)
+        except Exception:
+            pass
 
     # ---------- helpers ----------
 
@@ -2174,11 +2189,14 @@ class MainWindow(QMainWindow):
             no_heading = not any(
                 lbl.text().startswith('选项')
                 for lbl in self.content_panel.findChildren(QLabel))
+            # the window has a fixed width, so lift the lock temporarily and
+            # resize to exercise the reflow, then restore it
+            locked = self.maximumWidth()
+            self.setMinimumWidth(0)
+            self.setMaximumWidth(16777215)
             self.resize(1200, 700)
             QApplication.processEvents()
             wide_rows, wide_cols, wide_w = option_layout()
-            # the sidebar is a fixed width now, so squeeze the panel by
-            # narrowing the window (the splitter can no longer resize it)
             self.resize(658, 700)
             QApplication.processEvents()
             narrow_rows, narrow_cols, narrow_w = option_layout()
@@ -2194,7 +2212,7 @@ class MainWindow(QMainWindow):
                              no_heading, wide_rows, wide_cols,
                              narrow_rows, narrow_cols, equal, options_ok))
             ok = ok and options_ok
-            self.resize(1200, 700)
+            self.setFixedWidth(locked)
             QApplication.processEvents()
 
             # --- menus: native NSMenu on macOS, Qt menu bar elsewhere ---

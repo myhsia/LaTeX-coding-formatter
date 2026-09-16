@@ -36,18 +36,33 @@ class QtDiffViewAdapter:
         self.formats = {'add': getattr(window, 'fmt_add', None),
                         'del': getattr(window, 'fmt_del', None),
                         'meta': getattr(window, 'fmt_meta', None)}
+        # a one-cell left gutter: the +/-/space marker hangs outside the
+        # 80-column code area (code aligns at the pane's left edge)
+        try:
+            from PySide6.QtGui import QFontMetricsF
+
+            self.advance = QFontMetricsF(
+                self.output.font()).horizontalAdvance('M')
+            self.output.document().setDocumentMargin(0)
+            self.output.setViewportMargins(-self.advance, 0, 0, 0)
+        except Exception:
+            self.advance = 0.0
 
     def clear(self):
         self.output.clear()
 
     def append(self, text, fmt=None):
-        from PySide6.QtGui import QTextCursor
+        from PySide6.QtGui import QTextBlockFormat, QTextCursor
 
         tag = _tag_of(fmt, self.formats)
         if tag is not None:
             fmt = self.formats.get(tag)
         cursor = self.output.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
+        block = QTextBlockFormat()
+        block.setLeftMargin(self.advance)
+        block.setTextIndent(-self.advance)
+        cursor.setBlockFormat(block)
         if fmt is None or isinstance(fmt, str):
             cursor.insertText(text)
         else:

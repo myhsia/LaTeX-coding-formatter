@@ -81,7 +81,9 @@ class NativeShell:
             # native window never reports isMainWindow), so hide it and draw
             # our own label below - full control over colour and size
             window.setTitleVisibility_(AppKit.NSWindowTitleHidden)
-            window.setMinSize_(WINDOW_MIN)
+            # fixed width (Settings/diff-fit); only the height can resize
+            window.setMinSize_((width, WINDOW_MIN[1]))
+            window.setMaxSize_((width, 1.0e6))
             window.setBackgroundColor_(AppKit.NSColor.windowBackgroundColor())
             try:
                 window.setTitlebarSeparatorStyle_(
