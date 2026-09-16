@@ -698,9 +698,8 @@ class MainWindow(QMainWindow):
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
-        # comfortable grab area, but Qt draws no line - our own separator
-        # (sidebar_sep) is the visible divider and runs the full height
-        splitter.setHandleWidth(6)
+        # no draggable handle: the sidebar has a fixed width (Settings-style)
+        splitter.setHandleWidth(0)
         splitter.setStyleSheet('QSplitter::handle { background: transparent; }')
         self.splitter = splitter
 
@@ -1576,9 +1575,11 @@ class MainWindow(QMainWindow):
             no_sep = self.centralWidget().findChild(QFrame, 'sidebarsep') is None
             lines.append('no vertical divider line: {}'.format(no_sep))
             ok = ok and no_sep
-            lines.append('splitter grab width: {} pt'.format(
-                self.splitter.handleWidth()))
-            ok = ok and self.splitter.handleWidth() >= 4
+            # the sidebar has a fixed width: no draggable splitter handle
+            fixed_split = self.splitter.handleWidth() == 0
+            lines.append('splitter handle disabled (fixed {:.0f} pt sidebar): '
+                         '{}'.format(self.sidebar.width(), fixed_split))
+            ok = ok and fixed_split
             lines.append('native title hidden (label drawn instead): {}'
                          .format(nswin.titleVisibility()
                                  == AppKit.NSWindowTitleHidden))

@@ -359,6 +359,11 @@ def _split_class():
                 # fixed sidebar width: the divider cannot be dragged
                 return SIDEBAR_WIDTH
 
+            def setPosition_ofDividerAtIndex_(self, position, index):
+                # the interactive drag calls this directly and bypasses
+                # constrainSplitPosition, so swallow it to pin the divider
+                return
+
             def canCollapseSubview_(self, subview):
                 return False
 

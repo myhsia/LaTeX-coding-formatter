@@ -847,13 +847,12 @@ def run_self_test(app):
                      '134 pt): {}'.format(rows_ok))
         ok = ok and rows_ok
 
-        # the sidebar is a fixed 232 pt (dragging is disabled)
+        # the sidebar is a fixed 232 pt: moving the divider must not resize it
         try:
-            drag_off = (app.shell.split.constrainSplitPosition_ofSubviewAt_(
-                999.0, 0) == 232.0)
+            app.shell.split.setPosition_ofDividerAtIndex_(400.0, 0)
         except Exception:
-            drag_off = False
-        sidebar_ok = abs(app.shell.sidebar_width() - 232.0) < 0.5 and drag_off
+            pass
+        sidebar_ok = abs(app.shell.sidebar_width() - 232.0) < 0.5
         lines.append('sidebar fixed at 232 pt, drag disabled: {}'.format(
             sidebar_ok))
         ok = ok and sidebar_ok
