@@ -52,9 +52,13 @@ class MacApp:
         self.status = None
         self.enc_status = None
         self.enc_status_host = None
+        self.sel_status = None
+        self.sel_status_host = None
         self.status_separator = None
+        self.sel_separator = None
         self._status_region = None
         self._status_encoding = False
+        self._status_selected = False
         self.apply_button = None
         self.ext_popup = None
         self.enc_popup = None
@@ -276,6 +280,19 @@ class MacApp:
             AppKit.NSColor.separatorColor().CGColor())
         host.addSubview_(self.status_separator)
 
+        sel_status_slot = AppKit.NSView.alloc().init()
+        host.addSubview_(sel_status_slot)
+        self.sel_status = NativeLabel(None, ViewTarget(sel_status_slot), '',
+                                      fill=False)
+        self.sel_status.build()
+        self.sel_status_host = sel_status_slot
+
+        self.sel_separator = AppKit.NSView.alloc().init()
+        self.sel_separator.setWantsLayer_(True)
+        self.sel_separator.layer().setBackgroundColor_(
+            AppKit.NSColor.separatorColor().CGColor())
+        host.addSubview_(self.sel_separator)
+
         status_slot = AppKit.NSView.alloc().init()
         host.addSubview_(status_slot)
         self.status = NativeLabel(None, ViewTarget(status_slot), '就绪',
@@ -434,37 +451,51 @@ class MacApp:
         if self.diff is not None:
             self.diff.clear()
 
-    def set_status(self, text, encoding=None):
+    def set_status(self, text, encoding=None, selected=None):
         if self.status is not None:
             self.status.setText(text)
         if self.enc_status is not None:
             self.enc_status.setText(encoding or '')
+        if self.sel_status is not None:
+            self.sel_status.setText(selected or '')
         self._status_encoding = bool(encoding)
+        self._status_selected = bool(selected)
         self._place_status()
 
     def _place_status(self):
-        """Lay the status row out: [encoding] 8 [divider] 8 [counts]."""
+        """Lay the status row out as [encoding] | [selected] | [counts],
+        each segment behind a hairline and hidden when empty."""
         region = self._status_region
         if region is None or self.status is None:
             return
         x, y, width, height = region
-        show = bool(self._status_encoding) and self.enc_status is not None
-        if self.enc_status_host is not None:
-            self.enc_status_host.setHidden_(not show)
-        if self.status_separator is not None:
-            self.status_separator.setHidden_(not show)
-        if show:
-            enc_width = min(max(self.enc_status.size()[0], 1.0), width)
-            self.enc_status_host.setFrame_(((x, y), (enc_width, height)))
-            sep_x = x + enc_width + 8.0
-            self.status_separator.setFrame_(
-                ((sep_x, y + (height - 16.0) / 2.0), (1.0, 16.0)))
-            status_x = sep_x + 9.0
-            status_width = max(1.0, width - (status_x - x))
-        else:
-            status_x, status_width = x, width
-        self.status_host.setFrame_(((status_x, y), (status_width, height)))
-        for label in (self.enc_status, self.status):
+        right = x + width
+        cursor = x
+        segments = (
+            (bool(self._status_encoding), self.enc_status,
+             self.enc_status_host, self.status_separator),
+            (bool(self._status_selected), self.sel_status,
+             self.sel_status_host, self.sel_separator),
+        )
+        for show, label, host, separator in segments:
+            if host is None:
+                continue
+            host.setHidden_(not show)
+            if separator is not None:
+                separator.setHidden_(not show)
+            if not show or label is None:
+                continue
+            seg_width = min(max(label.size()[0], 1.0),
+                            max(1.0, right - cursor))
+            host.setFrame_(((cursor, y), (seg_width, height)))
+            cursor += seg_width + 8.0
+            if separator is not None:
+                separator.setFrame_(
+                    ((cursor, y + (height - 16.0) / 2.0), (1.0, 16.0)))
+            cursor += 1.0 + 8.0
+        status_width = max(1.0, right - cursor)
+        self.status_host.setFrame_(((cursor, y), (status_width, height)))
+        for label in (self.enc_status, self.sel_status, self.status):
             if label is not None:
                 try:
                     label.place()
@@ -566,8 +597,6 @@ class MacApp:
             self.list.select_index(0)
         self.update_hint()
         self.update_remove_enabled()
-        self.set_status('已选择 {} 个文件 (新增 {} 个)'.format(
-            self.list.count(), added))
         return added
 
     def choose_files(self):
@@ -855,13 +884,17 @@ def run_self_test(app):
         lines.append('confirm alert left-aligns its text: {}'.format(left_ok))
         ok = ok and left_ok
 
-        # the status bar carries the encoding behind a hairline divider
-        app.set_status('测试', encoding='GBK')
-        enc_ok = app.enc_status.text() == 'GBK' and app.enc_status.isVisible()
+        # the status bar carries encoding + selected count behind hairlines
+        app.set_status('测试', encoding='GBK', selected='已选择 2 个文件')
+        enc_ok = (app.enc_status.text() == 'GBK'
+                  and app.enc_status.isVisible()
+                  and app.sel_status.text() == '已选择 2 个文件'
+                  and app.sel_status.isVisible())
         app.set_status('就绪')
-        enc_ok = enc_ok and not app.enc_status.isVisible()
-        lines.append('status bar encoding segment shown then hidden: '
-                     '{}'.format(enc_ok))
+        enc_ok = (enc_ok and not app.enc_status.isVisible()
+                  and not app.sel_status.isVisible())
+        lines.append('status bar encoding/selected segments shown then '
+                     'hidden: {}'.format(enc_ok))
         ok = ok and enc_ok
 
         # --- interactive regressions -------------------------------------

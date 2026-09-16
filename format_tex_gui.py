@@ -926,6 +926,19 @@ class MainWindow(QMainWindow):
         self.status_separator.setStyleSheet(
             '#statussep { background: rgba(120, 120, 128, 0.28); }')
         self.status_separator.setVisible(False)
+        self.sel_status_label = QLabel('')
+        self.sel_status_label.setObjectName('sellabel')
+        self.sel_status_label.setStyleSheet(
+            '#sellabel {{ color: {}; padding-top: 2px; }}'.format(
+                self.palette().color(QPalette.ColorRole.WindowText).name()))
+        self.sel_status_label.setVisible(False)
+        self.sel_separator = QFrame()
+        self.sel_separator.setObjectName('statussep')
+        self.sel_separator.setFixedWidth(1)
+        self.sel_separator.setFixedHeight(16)
+        self.sel_separator.setStyleSheet(
+            '#statussep { background: rgba(120, 120, 128, 0.28); }')
+        self.sel_separator.setVisible(False)
         self.status_label = LabelControl(QLabel('就绪'), '就绪', self)
         self.status_label.qt.setObjectName('statuslabel')
         self.status_label.qt.setStyleSheet(
@@ -939,6 +952,8 @@ class MainWindow(QMainWindow):
         bottom.setContentsMargins(0, 0, 0, 0)
         bottom.addWidget(self.enc_status_label)
         bottom.addWidget(self.status_separator)
+        bottom.addWidget(self.sel_status_label)
+        bottom.addWidget(self.sel_separator)
         bottom.addWidget(self.status_label.qt)
         bottom.addWidget(self.status_label.slot)
         bottom.addStretch(1)
@@ -972,15 +987,20 @@ class MainWindow(QMainWindow):
             self.apply_window_effects()
         return super().event(ev)
 
-    def set_status(self, text, encoding=None):
+    def set_status(self, text, encoding=None, selected=None):
         """Update the status line (lives at the bottom of the content
-        panel so the sidebar can run the full window height). ``encoding``,
-        when given, is shown before the text behind a hairline divider."""
+        panel so the sidebar can run the full window height). ``encoding``
+        and ``selected``, when given, are shown before the text behind
+        hairline dividers."""
         self.status_label.setText(text)
         has_encoding = bool(encoding)
         self.enc_status_label.setText(encoding or '')
         self.enc_status_label.setVisible(has_encoding)
         self.status_separator.setVisible(has_encoding)
+        has_selected = bool(selected)
+        self.sel_status_label.setText(selected or '')
+        self.sel_status_label.setVisible(has_selected)
+        self.sel_separator.setVisible(has_selected)
 
     def _splitter_moved(self, *_args):
         self._sync_sidebar_width()
@@ -2401,14 +2421,18 @@ class MainWindow(QMainWindow):
                  '{}'.format(confirm_ok))
             ok = ok and confirm_ok
 
-            # the status bar carries the encoding behind a hairline divider
-            self.set_status('测试', encoding='GBK')
+            # the status bar carries encoding + selected count behind hairlines
+            self.set_status('测试', encoding='GBK',
+                            selected='已选择 2 个文件')
             enc_ok = (self.enc_status_label.text() == 'GBK'
-                      and self.enc_status_label.isVisible())
+                      and self.enc_status_label.isVisible()
+                      and self.sel_status_label.text() == '已选择 2 个文件'
+                      and self.sel_status_label.isVisible())
             self.set_status('就绪')
-            enc_ok = enc_ok and not self.enc_status_label.isVisible()
-            note('status bar encoding segment shown then hidden: {}'.format(
-                enc_ok))
+            enc_ok = (enc_ok and not self.enc_status_label.isVisible()
+                      and not self.sel_status_label.isVisible())
+            note('status bar encoding/selected segments shown then hidden: '
+                 '{}'.format(enc_ok))
             ok = ok and enc_ok
 
             note('checking native controls')
@@ -2619,8 +2643,6 @@ class MainWindow(QMainWindow):
                 entry, tuple) else (entry, root)
             rows.append((name, file_root or Path(name).parent))
         added = self.files_view.add(rows)
-        self.set_status('已选择 {} 个文件 (新增 {} 个)'.format(
-            self.files_view.count(), added))
         return added
 
     def _on_list_selection(self):
@@ -2665,25 +2687,19 @@ class MainWindow(QMainWindow):
             ext = self.ext_edit.currentText().strip() or '.tex'
             recursive = self.recursive_enabled()
             collected = []
-            n_dirs = n_files = 0
             seen = set()
             for p in paths:
                 path = Path(p)
                 if path.is_dir():
-                    n_dirs += 1
                     for m in scan_directory(path, ext, recursive):
                         if str(m) not in seen:
                             seen.add(str(m))
                             collected.append((str(m), str(path)))
                 elif path.is_file():
-                    n_files += 1
                     if str(path) not in seen:
                         seen.add(str(path))
                         collected.append((str(path), str(path.parent)))
-            added = self._add_paths(collected)
-            self.set_status(
-                '拖入 {} 个文件、{} 个目录: 新增 {} 个文件 (共 {} 个)'.format(
-                    n_files, n_dirs, added, self.file_list.count()))
+            self._add_paths(collected)
         except Exception:
             self.show_error(traceback.format_exc())
 

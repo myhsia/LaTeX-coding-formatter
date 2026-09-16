@@ -9,7 +9,7 @@ drives the Qt widgets and the AppKit views:
     view.selected_entries() -> [(Path, Path | None), ...]
     view.append(text, tag)               # tag: 'add' | 'del' | 'meta' | None
     view.clear_output()
-    view.set_status(text, encoding=None)   # encoding shown in the status bar
+    view.set_status(text, encoding=None, selected=None)  # status-bar segments
     view.options() -> FormatOptions
     view.check_only() -> bool            # the "仅检查" option
     view.confirm(count) -> bool          # ask before writing
@@ -149,4 +149,5 @@ class FormatController:
         self.view.set_status(
             '需修改: {}  已符合: {}  错误: {}{}'.format(
                 n_change, unchanged, errors, suffix),
-            encoding=encoding)
+            encoding=encoding,
+            selected='已选择 {} 个文件'.format(len(results)))
