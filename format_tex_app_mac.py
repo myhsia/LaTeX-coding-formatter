@@ -116,11 +116,14 @@ class MacApp:
         group.addSubview_(self.group_separator)
 
         switch = AppKit.NSSwitch.alloc().init()
-        switch.setControlSize_(AppKit.NSControlSizeRegular)
+        # the smaller Settings-style toggle (Regular is 38x22, Small 32x18)
+        switch.setControlSize_(AppKit.NSControlSizeSmall)
         switch.setTarget_(None)
         switch.setState_(AppKit.NSControlStateValueOff)
         switch.sizeToFit()
         group.addSubview_(switch)
+        # the switch only adopts the small size once it is in the window
+        switch.sizeToFit()
         self.switch = switch
         self.switch_host = host
 
@@ -711,6 +714,12 @@ def run_self_test(app):
                          lights_ok, inset_ok, title_ok, left_ok, colour_ok,
                          chrome_ok))
         ok = ok and chrome_ok
+
+        # the 含子目录 toggle is the smaller Settings-style switch
+        switch_small = (app.switch.controlSize() == AppKit.NSControlSizeSmall)
+        lines.append('recursive switch uses the small control size: '
+                     '{}'.format(switch_small))
+        ok = ok and switch_small
 
         # --- interactive regressions -------------------------------------
         # every native control's action must be implemented by its target,

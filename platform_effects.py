@@ -119,9 +119,9 @@ def title_font_size():
     """Point size for the window title (Finder-like semibold; override
     with FORMAT_TEX_TITLE_SIZE)."""
     try:
-        return float(os.environ.get('FORMAT_TEX_TITLE_SIZE', 15.0))
+        return float(os.environ.get('FORMAT_TEX_TITLE_SIZE', 14.0))
     except (TypeError, ValueError):
-        return 15.0
+        return 14.0
 
 
 def band_material_name():
@@ -690,7 +690,7 @@ def create_native_switch(window, callback, on=False):
             target = _switch_target_class().alloc().init()
             target.callback = callback
             switch = AppKit.NSSwitch.alloc().init()
-            switch.setControlSize_(AppKit.NSControlSizeRegular)
+            switch.setControlSize_(AppKit.NSControlSizeSmall)
             switch.setTarget_(target)
             switch.setAction_(b'switched:')
             switch.sizeToFit()
