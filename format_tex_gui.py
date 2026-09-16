@@ -790,12 +790,6 @@ class MainWindow(QMainWindow):
         flv.setContentsMargins(1, 1, 1, 1)
         flv.setSpacing(0)
         flv.addWidget(self.file_list, 1)
-        barsep = QFrame()
-        barsep.setObjectName('listbarsep')
-        barsep.setFixedHeight(1)
-        barsep.setStyleSheet(
-            '#listbarsep { background: rgba(120, 120, 128, 0.28); }')
-        flv.addWidget(barsep)
 
         button_qss = (
             'QPushButton {{ border: none; background: transparent;'

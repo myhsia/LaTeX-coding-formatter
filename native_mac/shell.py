@@ -90,7 +90,7 @@ class NativeShell:
 
             content = window.contentView()
 
-            split = AppKit.NSSplitView.alloc().initWithFrame_(
+            split = _split_class().alloc().initWithFrame_(
                 content.bounds())
             split.setVertical_(True)
             split.setDividerStyle_(AppKit.NSSplitViewDividerStyleThin)
@@ -134,10 +134,9 @@ class NativeShell:
                 ((0.0, 0.0), (SIDEBAR_WIDTH, FOOTER_HEIGHT)))
             footer.setAutoresizingMask_(AppKit.NSViewWidthSizable
                                         | AppKit.NSViewMaxYMargin)
-            separator = AppKit.NSBox.alloc().init()
-            separator.setBoxType_(AppKit.NSBoxSeparator)
+            # no separator line above the footer: the +/- bar already reads
+            # as a raised bar by its own material (Finder-style)
             sidebar.addSubview_(footer)
-            sidebar.addSubview_(separator)
 
             split.addSubview_(sidebar)
             split.addSubview_(panel)
@@ -152,7 +151,8 @@ class NativeShell:
             self.sidebar_material, self.panel, self.band = (
                 sidebar_material, panel, band)
             self.sidebar_host, self.content_host = sidebar_host, panel_host
-            self.footer_host, self.footer_separator = footer, separator
+            self.footer_host = footer
+            self.footer_separator = None
             self.toolbar_host = band
             # our own title label, drawn above the band (the band material
             # would otherwise frost it) and centred in the band
@@ -218,8 +218,6 @@ class NativeShell:
               max(1.0, top - group_height - margin - FOOTER_HEIGHT))))
         self.footer_host.setFrame_(((0.0, 0.0),
                                     (sidebar_width, FOOTER_HEIGHT)))
-        self.footer_separator.setFrame_(((0.0, FOOTER_HEIGHT),
-                                         (sidebar_width, 1.0)))
 
         # content: the strip occupies the top, the rest is the panel host
         self.content_host.setFrame_(
@@ -333,3 +331,28 @@ def _relayout_owner(delegate):
     owner = getattr(delegate, 'owner', None)
     if owner is not None:
         owner.layout()
+
+
+_SPLIT_CLASS = None
+
+
+def _split_class():
+    """``NSSplitView`` that draws no divider line.
+
+    The sidebar and content differ by material only (Finder-style), so the
+    1 pt divider is painted with the content background instead of the
+    split view's separator hairline."""
+    global _SPLIT_CLASS
+    if _SPLIT_CLASS is None:
+        import AppKit
+
+        class _Split(AppKit.NSSplitView):
+            def drawDividerInRect_(self, rect):
+                try:
+                    AppKit.NSColor.windowBackgroundColor().set()
+                    AppKit.NSRectFill(rect)
+                except Exception:
+                    pass
+
+        _SPLIT_CLASS = _Split
+    return _SPLIT_CLASS
