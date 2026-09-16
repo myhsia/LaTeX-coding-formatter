@@ -116,12 +116,12 @@ def last_title_view():
 
 
 def title_font_size():
-    """Point size for the window title (macOS 26 toolbar titles use the
-    standard 13 pt; override with FORMAT_TEX_TITLE_SIZE)."""
+    """Point size for the window title (Finder-like semibold; override
+    with FORMAT_TEX_TITLE_SIZE)."""
     try:
-        return float(os.environ.get('FORMAT_TEX_TITLE_SIZE', 13.0))
+        return float(os.environ.get('FORMAT_TEX_TITLE_SIZE', 15.0))
     except (TypeError, ValueError):
-        return 13.0
+        return 15.0
 
 
 def band_material_name():
@@ -889,7 +889,7 @@ def _macos(window, dark):
             AppKit, AppKit.NSVisualEffectMaterialSidebar,
             AppKit.NSVisualEffectBlendingModeBehindWindow)
     if _TITLE_VIEW is None:
-        _TITLE_VIEW = _make_title_field(AppKit, nswin.title())
+        _TITLE_VIEW = make_title_field(AppKit, nswin.title())
     # the sidebar sits below Qt (its column is transparent) while the
     # band sits above Qt (the content panel under it is opaque)
     for view, position in ((_SIDEBAR_VIEW, AppKit.NSWindowBelow),
@@ -916,7 +916,7 @@ def _macos(window, dark):
     return '52 pt band + sidebar blur'
 
 
-def _make_title_field(AppKit, text):
+def make_title_field(AppKit, text):
     """A plain label for the window title, drawn above the band."""
     field = AppKit.NSTextField.alloc().init()
     field.setBezeled_(False)
@@ -1055,11 +1055,11 @@ def _align_titlebar(nswin):
     # boundary (falling back to just after the traffic lights when there
     # is no sidebar). AppKit draws the title of a non-main window in an
     # unemphasized grey and a Qt window can never be main, so we render
-    # it ourselves (see _style_title for the colour/dimming).
+    # it ourselves (see style_title for the colour/dimming).
     title = _TITLE_VIEW
     if title is None:
         return
-    _style_title(AppKit, nswin, title)
+    style_title(AppKit, nswin, title)
     frame = nswin.frame()
     left = frame.origin.x
     top = frame.origin.y + frame.size.height
@@ -1081,7 +1081,7 @@ def _align_titlebar(nswin):
     title.setHidden_(False)
 
 
-def _style_title(AppKit, nswin, title):
+def style_title(AppKit, nswin, title):
     """Colour our title label the way macOS renders a main window's
     title: the primary label colour (white in dark mode, black in light)
     while the window is active, dimmed to the secondary colour when it is

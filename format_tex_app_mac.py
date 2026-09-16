@@ -31,7 +31,8 @@ from native_mac.drop import make_drop_view  # noqa: E402
 from native_mac.filelist import NativeFileList  # noqa: E402
 from native_mac.shell import (BAND_HEIGHT, FOOTER_HEIGHT,  # noqa: E402
                               NativeShell)
-from platform_effects import ViewTarget, lights_inset  # noqa: E402
+from platform_effects import (ViewTarget, lights_inset,  # noqa: E402
+                              title_gap)
 
 EXTENSIONS = ['*.tex', '*.ctx', '*.sty', '*.cls', '*.dtx', '*.txt']
 ENCODINGS = ['同输入', 'utf-8', 'utf-8-sig', 'gb2312', 'gbk', 'big5',
@@ -665,7 +666,7 @@ def run_self_test(app):
                      and app.plus_minus.segmentStyle()
                      == AppKit.NSSegmentStyleSmallSquare)
 
-        # titlebar chrome (traffic lights + title) centred in the band
+        # titlebar chrome (traffic lights + our own title label) centred
         app.shell.layout()
         win = app.shell.window
         frame = win.frame()
@@ -676,19 +677,39 @@ def run_self_test(app):
             rect = win.convertRectToScreen_(rect)
             return top - (rect.origin.y + rect.size.height / 2.0)
 
+        def left_from_edge(view):
+            rect = view.convertRect_toView_(view.bounds(), None)
+            rect = win.convertRectToScreen_(rect)
+            return rect.origin.x - frame.origin.x
+
         close = win.standardWindowButton_(AppKit.NSWindowCloseButton)
         lights_ok = abs(centre_from_top(close) - BAND_HEIGHT / 2.0) < 1.5
-        rect = close.convertRect_toView_(close.bounds(), None)
-        rect = win.convertRectToScreen_(rect)
-        inset_ok = abs((rect.origin.x - frame.origin.x)
-                       - lights_inset()) < 1.5
-        title = win.toolbarTitlebarTitleTextField()
+        inset_ok = abs(left_from_edge(close) - lights_inset()) < 1.5
+        title = app.shell.title_label
         title_ok = (title is not None
                     and abs(centre_from_top(title) - BAND_HEIGHT / 2.0) < 1.5)
-        chrome_ok = lights_ok and inset_ok and title_ok
-        lines.append('titlebar chrome centred (lights y {}, left inset {}, '
-                     'title y {}): {}'.format(lights_ok, inset_ok, title_ok,
-                                              chrome_ok))
+        left_ok = (title is not None
+                   and abs(left_from_edge(title)
+                           - (app.shell.sidebar_width() + title_gap())) < 2.0)
+        colour_ok = True
+        if title is not None:
+            try:
+                colour = title.textColor()
+                colour = colour.colorUsingColorSpace_(
+                    AppKit.NSColorSpace.sRGBColorSpace()) if colour else None
+                if bool(win.isKeyWindow()) and colour is not None:
+                    brightest = max(colour.redComponent(),
+                                    colour.greenComponent(),
+                                    colour.blueComponent())
+                    colour_ok = brightest > 0.6      # label colour, not grey
+            except Exception:
+                colour_ok = True
+        chrome_ok = (lights_ok and inset_ok and title_ok and left_ok
+                     and colour_ok)
+        lines.append('titlebar chrome centred (lights y {}, inset {}, '
+                     'title y {}, left {}, colour {}): {}'.format(
+                         lights_ok, inset_ok, title_ok, left_ok, colour_ok,
+                         chrome_ok))
         ok = ok and chrome_ok
 
         # --- interactive regressions -------------------------------------

@@ -22,7 +22,8 @@ the Qt app produced, now without Qt. Callers host their own views inside
 import sys
 
 from platform_effects import (band_height, center_titlebar_in_band,
-                              inset_traffic_lights, lights_inset, title_gap)
+                              inset_traffic_lights, lights_inset,
+                              make_title_field, style_title, title_gap)
 
 BAND_HEIGHT = 52.0
 FOOTER_HEIGHT = 24.0
@@ -47,6 +48,7 @@ class NativeShell:
         self.footer_separator = None
         self.footer_host = None
         self.sidebar_group = None
+        self.title_label = None
         self._delegate = None
         self.on_layout = None          # called after each relayout
 
@@ -72,7 +74,10 @@ class NativeShell:
                     AppKit.NSBackingStoreBuffered, False)
             window.setTitle_(self.title)
             window.setTitlebarAppearsTransparent_(True)
-            window.setTitleVisibility_(AppKit.NSWindowTitleVisible)
+            # AppKit draws the title of a non-main window unemphasized (this
+            # native window never reports isMainWindow), so hide it and draw
+            # our own label below - full control over colour and size
+            window.setTitleVisibility_(AppKit.NSWindowTitleHidden)
             window.setMinSize_(WINDOW_MIN)
             window.setBackgroundColor_(AppKit.NSColor.windowBackgroundColor())
             try:
@@ -147,6 +152,10 @@ class NativeShell:
             self.sidebar_host, self.content_host = sidebar_host, panel_host
             self.footer_host, self.footer_separator = footer, separator
             self.toolbar_host = band
+            # our own title label, drawn above the band (the band material
+            # would otherwise frost it) and centred in the band
+            self.title_label = make_title_field(AppKit, window.title())
+            content.addSubview_(self.title_label)
             # AppKit resets the titlebar chrome on resize/activation/full
             # screen, so re-centre it from the window delegate
             self._delegate = _window_delegate_class().alloc().init()
@@ -219,44 +228,45 @@ class NativeShell:
             self.on_layout()
 
     def _align_chrome(self, sidebar_width):
-        """Centre the AppKit titlebar chrome (traffic lights + title) in
-        the top band, inset the traffic lights like Finder and left-align
-        the title past the sidebar. In full screen macOS hides the
-        titlebar, so the band is hidden and nothing is centred."""
+        """Centre the traffic lights in the top band, inset them like
+        Finder, and place our own title label. In full screen macOS hides
+        the titlebar, so the band and title are hidden."""
         try:
             import AppKit
 
             if self.window.styleMask() & AppKit.NSWindowStyleMaskFullScreen:
                 if self.band is not None:
                     self.band.setHidden_(True)
+                if self.title_label is not None:
+                    self.title_label.setHidden_(True)
                 return
             if self.band is not None:
                 self.band.setHidden_(False)
             band = band_height() or BAND_HEIGHT
             center_titlebar_in_band(self.window, band)
             inset_traffic_lights(self.window, lights_inset())
-            self._align_title(sidebar_width)
+            self._place_title(sidebar_width, band)
         except Exception:
             pass
 
-    def _align_title(self, sidebar_width):
-        """Left-align the window title just right of the sidebar (its
-        vertical position follows the centred titlebar container)."""
-        try:
-            title = self.window.toolbarTitlebarTitleTextField()
-            if title is None:
-                return
-            frame = self.window.frame()
-            left = frame.origin.x
-            rect = title.convertRect_toView_(title.bounds(), None)
-            screen = self.window.convertRectToScreen_(rect)
-            target = left + sidebar_width + title_gap()
-            delta = target - screen.origin.x
-            if abs(delta) >= 0.5:
-                tf = title.frame()
-                title.setFrameOrigin_((tf.origin.x + delta, tf.origin.y))
-        except Exception:
-            pass
+    def _place_title(self, sidebar_width, band):
+        """Style and place the title label: left-aligned just right of the
+        sidebar, vertically centred in the band. Drawing it ourselves (rather
+        than using AppKit's title) avoids the unemphasised grey AppKit uses
+        for a non-main window and lets us set the size/weight."""
+        if self.title_label is None:
+            return
+        import AppKit
+
+        style_title(AppKit, self.window, self.title_label)
+        self.title_label.sizeToFit()
+        size = self.title_label.frame().size
+        content = self.window.contentView()
+        height = content.bounds().size.height
+        x = sidebar_width + title_gap()
+        y = height - band / 2.0 - size.height / 2.0
+        self.title_label.setFrame_(((x, y), (size.width, size.height)))
+        self.title_label.setHidden_(False)
 
     # ---------- helpers ----------
     def make_group_box(self):
