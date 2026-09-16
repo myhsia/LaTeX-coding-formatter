@@ -441,7 +441,10 @@ class MacApp:
             return True
         import AppKit
 
-        alert = AppKit.NSAlert.alloc().init()
+        try:
+            alert = _left_alert_class().alloc().init()
+        except Exception:
+            alert = AppKit.NSAlert.alloc().init()   # fallback: centred text
         alert.setAlertStyle_(AppKit.NSAlertStyleWarning)
         alert.setMessageText_(
             '未启用备份, 将直接修改 {} 个文件'.format(count))
@@ -643,6 +646,30 @@ def _drop_info(paths):
     return info
 
 
+_LEFT_ALERT_CLASS = None
+
+
+def _left_alert_class():
+    """An ``NSAlert`` whose text is left-aligned.
+
+    macOS 27 centres the alert's message/informative text; the private
+    ``_layoutPrefersCenterAlignment`` flag drives it (adding an accessory
+    flips it but adds an empty strip). Overriding the flag to ``False``
+    left-aligns the native text with no layout change. If a future macOS
+    drops the method the override is simply inert and the text falls back
+    to centred."""
+    global _LEFT_ALERT_CLASS
+    if _LEFT_ALERT_CLASS is None:
+        from AppKit import NSAlert
+
+        class _LeftAlert(NSAlert):
+            def _layoutPrefersCenterAlignment(self):
+                return False
+
+        _LEFT_ALERT_CLASS = _LeftAlert
+    return _LEFT_ALERT_CLASS
+
+
 def _pump(AppKit, seconds=0.1):
     """Run the run loop briefly (NSApplication.run() would block)."""
     try:
@@ -769,6 +796,12 @@ def run_self_test(app):
         lines.append('confirm() returns True with backups on (no dialog): '
                      '{}'.format(confirm_ok))
         ok = ok and confirm_ok
+
+        # the destructive confirm's alert left-aligns its text
+        left_ok = (_left_alert_class()()
+                   ._layoutPrefersCenterAlignment() is False)
+        lines.append('confirm alert left-aligns its text: {}'.format(left_ok))
+        ok = ok and left_ok
 
         # --- interactive regressions -------------------------------------
         # every native control's action must be implemented by its target,
