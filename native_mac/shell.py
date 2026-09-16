@@ -86,8 +86,10 @@ class NativeShell:
             # fixed width (Settings/diff-fit); only the height can resize
             window.setMinSize_((width, WINDOW_MIN[1]))
             window.setMaxSize_((width, 1.0e6))
-            # no full screen: the green button is the classic "+" zoom
-            window.setCollectionBehavior_(0)
+            # no full screen: FullScreenNone makes the green button the
+            # classic "+" zoom (collectionBehavior 0 left it full-screen)
+            window.setCollectionBehavior_(
+                AppKit.NSWindowCollectionBehaviorFullScreenNone)
             self._zoom_target = _zoom_target_class().alloc().init()
             self._zoom_target.owner = self
             zoom = window.standardWindowButton_(

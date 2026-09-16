@@ -877,10 +877,19 @@ def run_self_test(app):
         action = zoom.action() if zoom is not None else None
         action_name = (action.decode() if isinstance(action, bytes)
                        else str(action))
-        zoom_ok = (app.shell.window.collectionBehavior() == 0
-                   and zoom is not None
-                   and zoom.target() is app.shell.zoom_target()
-                   and action_name.endswith('performZoom:'))
+        glyph_ok = True
+        try:
+            glyph_ok = (zoom.cell()
+                        ._accessibilityZoomButtonHasFullscreenBehavior()
+                        is False)
+        except Exception:
+            glyph_ok = True
+        zoom_ok = (
+            app.shell.window.collectionBehavior()
+            == AppKit.NSWindowCollectionBehaviorFullScreenNone
+            and zoom is not None
+            and zoom.target() is app.shell.zoom_target()
+            and action_name.endswith('performZoom:') and glyph_ok)
         lines.append('green button is the "+" zoom toggle (no full screen): '
                      '{}'.format(zoom_ok))
         ok = ok and zoom_ok
