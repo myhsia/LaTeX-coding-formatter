@@ -722,7 +722,7 @@ class MainWindow(QMainWindow):
             '#group { background: rgba(120, 120, 128, 0.12);'
             ' border-radius: 8px; }')
         gv = QVBoxLayout(group)
-        gv.setContentsMargins(10, 6, 10, 6)
+        gv.setContentsMargins(10, 0, 10, 0)
         gv.setSpacing(0)
 
         def row_separator():

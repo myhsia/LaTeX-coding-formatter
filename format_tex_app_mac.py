@@ -358,7 +358,7 @@ class MacApp:
             group = self.shell.sidebar_group
             gb = group.bounds()
             row_h = 44.0
-            margin = 6.0
+            margin = 0.0            # no top/bottom padding: equal 44 pt rows
             gap = 12.0
             width = gb.size.width
             top_y = gb.size.height - margin - row_h     # bottom of row 0
@@ -842,9 +842,9 @@ def run_self_test(app):
         group_h = app.shell.sidebar_group.frame().size.height
         pitch = (app.ext_host.frame().origin.y
                  - app.enc_host.frame().origin.y)
-        rows_ok = abs(group_h - 146.0) < 1.5 and abs(pitch - 45.0) < 1.5
+        rows_ok = abs(group_h - 134.0) < 1.5 and abs(pitch - 45.0) < 1.5
         lines.append('settings-style group rows (44 pt + hairline, group '
-                     '146 pt): {}'.format(rows_ok))
+                     '134 pt): {}'.format(rows_ok))
         ok = ok and rows_ok
 
         # titlebar chrome (traffic lights + our own title label) centred
