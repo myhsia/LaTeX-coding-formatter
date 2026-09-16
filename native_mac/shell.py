@@ -53,6 +53,8 @@ class NativeShell:
         self.sidebar_group = None
         self.title_label = None
         self._delegate = None
+        self._zoom_target = None
+        self._zoomed_frame = None
         self.on_layout = None          # called after each relayout
 
     @staticmethod
@@ -84,6 +86,15 @@ class NativeShell:
             # fixed width (Settings/diff-fit); only the height can resize
             window.setMinSize_((width, WINDOW_MIN[1]))
             window.setMaxSize_((width, 1.0e6))
+            # no full screen: the green button is the classic "+" zoom
+            window.setCollectionBehavior_(0)
+            self._zoom_target = _zoom_target_class().alloc().init()
+            self._zoom_target.owner = self
+            zoom = window.standardWindowButton_(
+                AppKit.NSWindowZoomButton)
+            if zoom is not None:
+                zoom.setTarget_(self._zoom_target)
+                zoom.setAction_(b'performZoom:')
             window.setBackgroundColor_(AppKit.NSColor.windowBackgroundColor())
             try:
                 window.setTitlebarSeparatorStyle_(
@@ -93,10 +104,10 @@ class NativeShell:
 
             content = window.contentView()
 
-            split = _split_class().alloc().initWithFrame_(
-                content.bounds())
-            split.setVertical_(True)
-            split.setDividerStyle_(AppKit.NSSplitViewDividerStyleThin)
+            # a plain container: no split view, so there is no draggable
+            # divider between the sidebar and the content (layout() sets
+            # both frames)
+            split = AppKit.NSView.alloc().initWithFrame_(content.bounds())
             split.setAutoresizingMask_(
                 AppKit.NSViewWidthSizable | AppKit.NSViewHeightSizable)
 
@@ -292,6 +303,32 @@ class NativeShell:
         if self.window is not None:
             self.window.makeKeyAndOrderFront_(None)
 
+    def zoom_target(self):
+        """The ObjC target used by the green button and Window ▸ Zoom."""
+        return self._zoom_target
+
+    def toggle_zoom(self):
+        """Classic "+" zoom: fill the screen's visible height (width
+        unchanged), toggle back to the remembered frame. Never full screen."""
+        if self.window is None:
+            return
+        try:
+            import AppKit
+
+            if self._zoomed_frame is None:
+                self._zoomed_frame = self.window.frame()
+                visible = self.window.screen().visibleFrame()
+                frame = self.window.frame()
+                self.window.setFrame_display_(
+                    ((frame.origin.x, visible.origin.y),
+                     (frame.size.width, visible.size.height)), True)
+            else:
+                self.window.setFrame_display_(self._zoomed_frame, True)
+                self._zoomed_frame = None
+            self.layout()
+        except Exception:
+            pass
+
     def _note(self, message):
         try:
             import platform_effects as pe
@@ -336,38 +373,22 @@ def _relayout_owner(delegate):
         owner.layout()
 
 
-_SPLIT_CLASS = None
+_ZOOM_TARGET_CLASS = None
 
 
-def _split_class():
-    """``NSSplitView`` that draws no divider line.
+def _zoom_target_class():
+    """Target for the green button / Window ▸ Zoom: toggle the window to
+    fill the screen's visible height (width unchanged), never full screen."""
+    global _ZOOM_TARGET_CLASS
+    if _ZOOM_TARGET_CLASS is None:
+        from AppKit import NSObject
 
-    The sidebar and content differ by material only (Finder-style), so the
-    1 pt divider is painted with the content background instead of the
-    split view's separator hairline."""
-    global _SPLIT_CLASS
-    if _SPLIT_CLASS is None:
-        import AppKit
+        class _ZoomTarget(NSObject):
+            def performZoom_(self, sender):
+                shell = getattr(self, 'owner', None)
+                if shell is not None:
+                    shell.toggle_zoom()
 
-        class _Split(AppKit.NSSplitView):
-            def drawDividerInRect_(self, rect):
-                try:
-                    AppKit.NSColor.windowBackgroundColor().set()
-                    AppKit.NSRectFill(rect)
-                except Exception:
-                    pass
+        _ZOOM_TARGET_CLASS = _ZoomTarget
+    return _ZOOM_TARGET_CLASS
 
-            def constrainSplitPosition_ofSubviewAt_(self, position, divider):
-                # fixed sidebar width: the divider cannot be dragged
-                return SIDEBAR_WIDTH
-
-            def setPosition_ofDividerAtIndex_(self, position, index):
-                # the interactive drag calls this directly and bypasses
-                # constrainSplitPosition, so swallow it to pin the divider
-                return
-
-            def canCollapseSubview_(self, subview):
-                return False
-
-        _SPLIT_CLASS = _Split
-    return _SPLIT_CLASS

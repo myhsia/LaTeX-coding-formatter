@@ -862,15 +862,28 @@ def run_self_test(app):
                      '134 pt): {}'.format(rows_ok))
         ok = ok and rows_ok
 
-        # the sidebar is a fixed 232 pt: moving the divider must not resize it
-        try:
-            app.shell.split.setPosition_ofDividerAtIndex_(400.0, 0)
-        except Exception:
-            pass
-        sidebar_ok = abs(app.shell.sidebar_width() - 232.0) < 0.5
-        lines.append('sidebar fixed at 232 pt, drag disabled: {}'.format(
-            sidebar_ok))
+        # the sidebar is a fixed 232 pt with no divider to drag (a plain
+        # container instead of a split view)
+        container = app.shell.split
+        sidebar_ok = (abs(app.shell.sidebar_width() - 232.0) < 0.5
+                      and not isinstance(container, AppKit.NSSplitView))
+        lines.append('sidebar fixed at 232 pt, no draggable divider: '
+                     '{}'.format(sidebar_ok))
         ok = ok and sidebar_ok
+
+        # the green button is the classic "+" zoom (no full screen)
+        zoom = app.shell.window.standardWindowButton_(
+            AppKit.NSWindowZoomButton)
+        action = zoom.action() if zoom is not None else None
+        action_name = (action.decode() if isinstance(action, bytes)
+                       else str(action))
+        zoom_ok = (app.shell.window.collectionBehavior() == 0
+                   and zoom is not None
+                   and zoom.target() is app.shell.zoom_target()
+                   and action_name.endswith('performZoom:'))
+        lines.append('green button is the "+" zoom toggle (no full screen): '
+                     '{}'.format(zoom_ok))
+        ok = ok and zoom_ok
 
         # fixed window width: the diff pane fits exactly 80 monospace cells
         import math

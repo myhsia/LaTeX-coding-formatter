@@ -239,7 +239,12 @@ def install(gui):
         # --- Window (nil targets: window/application handle them) --------
         window_menu = _submenu(main, 'Window')
         _item(window_menu, 'Minimize', b'performMiniaturize:', 'm', command)
-        _item(window_menu, 'Zoom', b'performZoom:')
+        # Zoom uses our toggle (fill the height, never full screen)
+        zoom_target = None
+        shell = getattr(gui, 'shell', None)
+        if shell is not None and callable(getattr(shell, 'zoom_target', None)):
+            zoom_target = shell.zoom_target()
+        _item(window_menu, 'Zoom', b'performZoom:', target=zoom_target)
         _item(window_menu, 'Bring All to Front', b'arrangeInFront:')
 
         AppKit.NSApp().setMainMenu_(main)
