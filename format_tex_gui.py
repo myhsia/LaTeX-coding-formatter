@@ -734,6 +734,7 @@ class MainWindow(QMainWindow):
             return sep
 
         ext_row = QHBoxLayout()
+        ext_row.setContentsMargins(0, 10, 0, 10)   # Settings-like 44 pt row
         ext_row.addWidget(QLabel('扩展名'))
         ext_row.addStretch(1)
         self.ext_edit = PopUpControl(NativeMenuCombo(EXTENSIONS, '.tex'),
@@ -746,6 +747,7 @@ class MainWindow(QMainWindow):
 
         # the encoding selector lives in the sidebar, just after 扩展名
         enc_row = QHBoxLayout()
+        enc_row.setContentsMargins(0, 10, 0, 10)   # Settings-like 44 pt row
         enc_row.addWidget(QLabel('输出编码'))
         enc_row.addStretch(1)
         self.enc_out = PopUpControl(NativeMenuCombo(ENCODINGS, '同输入'),
@@ -757,6 +759,7 @@ class MainWindow(QMainWindow):
         gv.addWidget(row_separator())
 
         rec_row = QHBoxLayout()
+        rec_row.setContentsMargins(0, 10, 0, 10)   # Settings-like 44 pt row
         rec_row.addWidget(QLabel('含子目录'))
         rec_row.addStretch(1)
         self.chk_recursive = QCheckBox()

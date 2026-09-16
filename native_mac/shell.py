@@ -207,7 +207,7 @@ class NativeShell:
         # file list, then the footer row
         margin = WINDOW_MARGIN
         top = height - BAND_HEIGHT - margin
-        group_height = 94.0        # three 30 pt rows + margins
+        group_height = 146.0       # 3 x 44 pt grid rows + 2 hairlines + insets
         if self.sidebar_group is not None:
             self.sidebar_group.setFrame_(
                 ((margin, top - group_height),
