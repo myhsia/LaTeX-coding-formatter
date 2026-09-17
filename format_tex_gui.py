@@ -126,6 +126,34 @@ class SpacerWidget(QWidget):
         self.setPalette(palette)
 
 
+def _fit_native_slot(window, slot, native):
+    """Grow a native control's slot to the size the Win32 control needs.
+
+    The native font's CJK fallback can be wider than Qt's ``sizeHint``, so
+    a slot sized from ``sizeHint`` clips the label (visible at 400%). The
+    control reports its ideal size in device pixels; convert back to
+    logical and never shrink."""
+    if native is None or not getattr(native, 'active', False):
+        return
+    try:
+        size = native.ideal_size()
+    except Exception:
+        size = None
+    if not size:
+        return
+    try:
+        ratio = float(slot.devicePixelRatioF()) or 1.0
+    except Exception:
+        ratio = 1.0
+    width = int(round(size[0] / ratio)) + 4
+    height = int(round(size[1] / ratio)) + 2
+    current = slot.size()
+    new_width = max(current.width(), width)
+    new_height = max(current.height(), height)
+    if (new_width, new_height) != (current.width(), current.height()):
+        slot.setFixedSize(new_width, new_height)
+
+
 class OptionControl:
     """One option checkbox: a Qt checkbox (data/fallback) plus, on macOS, a
     native ``NSButton`` checkbox drawn over a transparent spacer slot.
@@ -176,6 +204,8 @@ class OptionControl:
             self.native = None
         built = bool(self.native is not None and self.native.build())
         if built:
+            _fit_native_slot(self.window, self.slot, self.native)
+            self.window._reflow_options()
             self.qt.setChecked(self.checked)
             self.qt.setVisible(False)
             return True
@@ -266,6 +296,7 @@ class PopUpControl:
             self.native = None
         built = bool(self.native is not None and self.native.build())
         if built:
+            _fit_native_slot(self.window, self.slot, self.native)
             self.qt.setVisible(False)
             return True
         self.native = None
@@ -351,6 +382,7 @@ class ButtonControl:
             self.native = None
         built = bool(self.native is not None and self.native.build())
         if built:
+            _fit_native_slot(self.window, self.slot, self.native)
             self.qt.setVisible(False)
             return True
         self.native = None
@@ -415,6 +447,7 @@ class LabelControl:
             self.native = None
         built = bool(self.native is not None and self.native.build())
         if built:
+            _fit_native_slot(self.window, self.slot, self.native)
             self.qt.setVisible(False)
             return True
         self.native = None
@@ -1246,6 +1279,14 @@ class MainWindow(QMainWindow):
     def apply_window_effects(self):
         self.effect_note = apply_effects(self, self.dark)
         self._effects_applied = True
+        if sys.platform == 'win32':
+            # pick the common-controls dark theme before any control exists
+            try:
+                from win32_controls import configure_dark
+
+                configure_dark(self.dark)
+            except Exception:
+                pass
         if sys.platform == 'darwin':
             if not menus.install(self):
                 self._build_qt_menus()
@@ -2607,10 +2648,17 @@ class MainWindow(QMainWindow):
             user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
             user32.GetWindowRgn.restype = ctypes.c_int
             user32.GetWindowRgn.argtypes = [wintypes.HWND, ctypes.c_void_p]
+            user32.GetDC.restype = ctypes.c_void_p
+            user32.GetDC.argtypes = [wintypes.HWND]
+            user32.ReleaseDC.restype = ctypes.c_int
+            user32.ReleaseDC.argtypes = [wintypes.HWND, ctypes.c_void_p]
             gdi32.CreateRectRgn.restype = ctypes.c_void_p
             gdi32.CreateRectRgn.argtypes = [ctypes.c_int] * 4
             gdi32.DeleteObject.restype = wintypes.BOOL
             gdi32.DeleteObject.argtypes = [ctypes.c_void_p]
+            gdi32.GetPixel.restype = wintypes.DWORD
+            gdi32.GetPixel.argtypes = [ctypes.c_void_p, ctypes.c_int,
+                                       ctypes.c_int]
             getter = (getattr(user32, 'GetWindowLongPtrW', None)
                       or user32.GetWindowLongW)
             getter.restype = ctypes.c_ssize_t
@@ -2672,6 +2720,27 @@ class MainWindow(QMainWindow):
                 return bool(hwnd) and bool(
                     user32.IsWindowVisible(wintypes.HWND(hwnd)))
 
+            def sample(hwnd):
+                """A background pixel of a window as '#rrggbb' (dark check)."""
+                if not hwnd:
+                    return None
+                box = rect(hwnd, user32.GetClientRect)
+                if not box:
+                    return None
+                hdc = user32.GetDC(wintypes.HWND(hwnd))
+                if not hdc:
+                    return None
+                try:
+                    value = int(gdi32.GetPixel(
+                        hdc, max(1, box[2] - 4), max(1, box[3] // 2)))
+                    if value == 0xFFFFFFFF:
+                        return 'n/a'
+                    return '#%02x%02x%02x' % (
+                        value & 0xFF, (value >> 8) & 0xFF,
+                        (value >> 16) & 0xFF)
+                finally:
+                    user32.ReleaseDC(wintypes.HWND(hwnd), hdc)
+
             def report(label, native):
                 slot = getattr(native, 'slot', None)
                 if slot is None:
@@ -2711,6 +2780,14 @@ class MainWindow(QMainWindow):
                     parent = None
                 note('win32 child {}: parent {} host-match {}'.format(
                     label, parent, parent == int(host) if host else False))
+                note('win32 colours {}: dark {} bg #{:06x} fg #{:06x} '
+                     'hi #{:06x} ctlcolor-hits {} pixel {} host-pixel '
+                     '{}'.format(
+                         label, getattr(self, 'dark', None),
+                         getattr(native, '_bg', 0), getattr(native, '_fg', 0),
+                         getattr(native, '_hi', 0),
+                         getattr(native, '_ctlcolor_hits', 0),
+                         sample(child), sample(host)))
 
             targets = []
             files = getattr(getattr(self, 'files_view', None), 'native', None)

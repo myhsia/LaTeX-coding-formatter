@@ -154,13 +154,27 @@ shell 文件图标 (`SHGetFileInfoW` + `ImageList`)、资源管理器拖放
 
 Windows 的其余控件同样是真正的 Win32 控件 (`win32_controls.py`, 覆盖在 Qt
 槽位之上): 6 个选项复选框 = `BUTTON` + `BS_AUTOCHECKBOX`, 两个下拉 =
-`COMBOBOX` + `CBS_DROPDOWNLIST` (下拉高度用 `CB_SETMINVISIBLE` 与控件高度
-解耦), "应用格式化" = `BUTTON` + `BS_PUSHBUTTON`, 状态栏 = `STATIC`
-(`WM_CTLCOLORSTATIC`/`WM_CTLCOLORBTN` 返回 `NULL_BRUSH` + 透明背景, 以贴合
-Qt 面板); 字体按 Qt 字体的像素高度 × `devicePixelRatio` 生成, 控件再经
-`WM_SETFONT` 应用. 通知统一由宿主的**单一** WndProc 分发
-(`WM_COMMAND` 按控件 ID、`WM_CTLCOLOR*` 按子窗口句柄), 不再为每个控件
-嵌套一层子类. 所有 Win32 调用显式声明 `argtypes`/`restype`.
+`COMBOBOX` + `CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS`,
+"应用格式化" = `BUTTON` + `BS_PUSHBUTTON`, 状态栏 = `STATIC`
+(`WM_CTLCOLORSTATIC`/`WM_CTLCOLORBTN`/`WM_CTLCOLORLISTBOX` 返回按 Qt 调色板
+生成的**实心**画刷 + 文本色, 下拉高度用 `CB_SETMINVISIBLE` 与控件高度解耦);
+字体按 Qt 字体的像素高度 × `devicePixelRatio` 生成, 控件再经 `WM_SETFONT`
+应用. 通知统一由宿主的**单一** WndProc 分发 (`WM_COMMAND` 按控件 ID、
+`WM_CTLCOLOR*` 按子窗口句柄、`WM_DRAWITEM`/`WM_MEASUREITEM` 自绘), 不再为
+每个控件嵌套一层子类. 所有 Win32 调用显式声明 `argtypes`/`restype`.
+
+**深色模式**: `SetPreferredAppMode`(序号 135, `GetProcAddress` 解析, 调用失败
+则优雅降级) 设定进程主题, 每个控件再经 `AllowDarkModeForWindow`(133) +
+`SetWindowTheme`(`DarkMode_Explorer`; 下拉用 `DarkMode_CFD`) 单独启用; 旧版
+Windows 无这些入口时退回 `SetWindowTheme(hwnd,'','')`, 由实心画刷/文本色保证
+深色可读. 下拉的**展开列表**是 owner-draw (`WM_MEASUREITEM`/`WM_DRAWITEM`),
+按 `content_bg`/`WindowText` 绘制, 选中项用**系统强调色** (读取
+`HKCU\...\DWM\AccentColor`, 回退 `DwmGetColorizationColor`/Qt Highlight) 并以
+亮度选取黑/白文字, 因此展开的下拉在深色模式下也是深色的.
+
+选项槽位按原生控件的**理想尺寸** (`BCM_GETIDEALSIZE`, 回退
+`GetTextExtentPoint32W` + 控件装饰) ÷ `devicePixelRatio` 调整, 避免 CJK 回退
+字体比 Qt `sizeHint` 宽时标签被裁切 (400% 缩放下可见).
 
 宿主槽位 (`SpacerWidget`) 在 Windows 上**不能**使用
 `WA_TranslucentBackground`: 该属性会让 Qt 给子窗口设置 `WS_EX_LAYERED`,

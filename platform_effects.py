@@ -271,6 +271,60 @@ def as_target(window, target, inset=0.0, height=None):
     return SlotTarget(window, target, inset=inset, height=height)
 
 
+def native_accent_color(dark=False):
+    """The Windows selection/accent colour as '#rrggbb' (or None).
+
+    Read from the same registry value Windows itself uses for the accent
+    (``HKCU\\...\\DWM\\AccentColor``, a DWORD in ABGR), falling back to the
+    documented ``DwmGetColorizationColor``. Returns None if unavailable so
+    the caller can use the Qt palette highlight instead."""
+    if sys.platform != 'win32':
+        return None
+    try:
+        import winreg
+
+        with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r'Software\Microsoft\Windows\DWM') as key:
+            value, _kind = winreg.QueryValueEx(key, 'AccentColor')
+        value = int(value) & 0xFFFFFFFF
+        r = value & 0xFF
+        g = (value >> 8) & 0xFF
+        b = (value >> 16) & 0xFF
+        if (r, g, b) == (0, 0, 0):
+            raise ValueError('accent is black')
+        return '#{:02x}{:02x}{:02x}'.format(r, g, b)
+    except Exception:
+        pass
+    try:
+        import ctypes
+
+        dwm = ctypes.windll.dwmapi
+        colour = ctypes.c_uint32()
+        opaque = ctypes.c_int()
+        if dwm.DwmGetColorizationColor(ctypes.byref(colour),
+                                       ctypes.byref(opaque)) == 0:
+            value = int(colour.value)
+            r = (value >> 16) & 0xFF
+            g = (value >> 8) & 0xFF
+            b = value & 0xFF
+            return '#{:02x}{:02x}{:02x}'.format(r, g, b)
+    except Exception:
+        pass
+    return None
+
+
+def accent_text_color(rgb):
+    """Black or white text for a ``(r, g, b)`` accent, like Windows does."""
+    try:
+        r, g, b = rgb
+        # perceived luminance (sRGB-ish); Windows uses a similar threshold
+        luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0
+        return '#000000' if luminance > 0.6 else '#ffffff'
+    except Exception:
+        return '#ffffff'
+
+
 def native_window_color(dark=False):
     """The platform's native window background as '#rrggbb', so Qt can
     paint its content surface with the real system colour instead of its
