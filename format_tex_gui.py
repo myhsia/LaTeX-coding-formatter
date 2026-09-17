@@ -77,6 +77,21 @@ EXTENSIONS = ['*.tex', '*.ctx', '*.sty', '*.cls', '*.dtx', '*.txt']
 
 
 
+def _selftest_note(text):
+    """Checkpoint before the self-test itself runs.
+
+    Written only under ``--self-test`` and only until ``_self_test_qt``
+    starts (it overwrites the file with its own report), so a hang during
+    window/control construction still leaves the last completed step."""
+    if '--self-test' not in sys.argv:
+        return
+    try:
+        with open('format_tex_gui_selftest.txt', 'a', encoding='utf-8') as fh:
+            fh.write('checkpoint: {}\n'.format(text))
+    except Exception:
+        pass
+
+
 def detect_dark(app):
     try:
         return app.styleHints().colorScheme() == Qt.ColorScheme.Dark
@@ -736,6 +751,17 @@ class MainWindow(QMainWindow):
 
         self.dark = detect_dark(QApplication.instance())
         self.pal = DARK if self.dark else LIGHT
+        if sys.platform == 'win32' and not os.environ.get(
+                'FORMAT_TEX_NO_DARK'):
+            # select the common-controls theme before any window exists
+            try:
+                from win32_controls import configure_dark
+
+                _selftest_note('configure_dark start')
+                configure_dark(self.dark)
+                _selftest_note('configure_dark done')
+            except Exception:
+                pass
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -1277,28 +1303,26 @@ class MainWindow(QMainWindow):
             self._reapply_materials()
 
     def apply_window_effects(self):
+        _selftest_note('apply_window_effects start')
         self.effect_note = apply_effects(self, self.dark)
         self._effects_applied = True
-        if sys.platform == 'win32':
-            # pick the common-controls dark theme before any control exists
-            try:
-                from win32_controls import configure_dark
-
-                configure_dark(self.dark)
-            except Exception:
-                pass
         if sys.platform == 'darwin':
             if not menus.install(self):
                 self._build_qt_menus()
         self._setup_native_switch()
         self._setup_native_plus_minus()
+        _selftest_note('building option controls')
         for _slot, wrapper in self._option_widgets:
             wrapper.build_native()
+        _selftest_note('building single controls')
         for wrapper in (self.ext_edit, self.enc_out, self.btn_apply,
                         self.status_label):
             wrapper.build_native()
+        _selftest_note('building file list')
         self.files_view.build()
+        _selftest_note('building diff view')
         self.diff_view.build()
+        _selftest_note('apply_window_effects done')
         if debug_enabled():
             # FORMAT_TEX_DEBUG=1: outline the content surface too
             self.content_panel.setStyleSheet(
@@ -3057,17 +3081,21 @@ class MainWindow(QMainWindow):
 
 def main():
     selftest = '--self-test' in sys.argv
+    _selftest_note('main start')
     app = QApplication(sys.argv)
     app.setApplicationName('LaTeX Coding Style Formatter')
     if sys.platform.startswith('linux') and detect_dark(app):
         app.setStyle('Fusion')
+    _selftest_note('constructing MainWindow')
     window = MainWindow()
     window._selftest = selftest
     sys.excepthook = lambda t, v, tb: window.show_error(
         ''.join(traceback.format_exception(t, v, tb)))
     window.set_status(
         '就绪 (窗口效果: {})'.format(window.effect_note))
+    _selftest_note('showing window')
     window.show()
+    _selftest_note('window shown')
     if selftest:
         app.processEvents()
         ok = window.self_test()
