@@ -893,13 +893,10 @@ class Win32PopUp(_Win32Control):
         return (widest + int(round(28 * self._dpr())), height)
 
     def _item_text(self, item):
-        if item.itemData:
-            try:
-                text = ctypes.cast(item.itemData, ctypes.c_wchar_p).value
-                if text:
-                    return text
-            except Exception:
-                pass
+        # Never dereference ``itemData``: it is not guaranteed to be a
+        # string pointer for every draw pass (the closed field in
+        # particular), and a bad dereference faults the process. We added
+        # every string ourselves, so resolve by index.
         index = int(item.itemID)
         if 0 <= index < len(self._titles):
             return self._titles[index]
@@ -919,6 +916,8 @@ class Win32PopUp(_Win32Control):
             edit = bool(item.itemState & ODS_COMBOBOXEDIT)
             highlight = selected and not edit
             hdc = item.hDC
+            if not hdc:
+                return
             rect = wintypes.RECT(item.rcItem.left, item.rcItem.top,
                                  item.rcItem.right, item.rcItem.bottom)
             brush = self._hi_brush if highlight else self._brush

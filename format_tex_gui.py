@@ -3097,8 +3097,11 @@ def main():
     window.show()
     _selftest_note('window shown')
     if selftest:
+        _selftest_note('processEvents start')
         app.processEvents()
+        _selftest_note('processEvents done')
         ok = window.self_test()
+        _selftest_note('self_test done')
         # The report is already on disk, so exit directly: on Windows
         # interpreter/Qt teardown wedges after the window closes (the
         # hosted Win32 children keep the onefile process alive), which
