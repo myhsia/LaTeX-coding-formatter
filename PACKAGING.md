@@ -55,13 +55,28 @@ PyInstaller 不支持跨平台编译, Windows/Linux 版本通过 CI 在对应系
 
    | 产物 | 内容 |
    |---|---|
-   | `format-tex-windows-x86_64` | `format-tex-gui-windows-x86_64.exe`, `format-tex-windows-x86_64.exe` |
-   | `format-tex-windows-arm64`  | Windows on ARM (WOA, 如 Surface) 原生版本; **不兼容 x64** |
+   | `format-tex-windows-x86_64` | `format-tex-gui-windows-x86_64.exe` (单文件), `format-tex-windows-x86_64.exe`, `format-tex-gui-windows-x86_64-portable.zip` (onedir), `SHA256SUMS.txt` |
+   | `format-tex-windows-arm64`  | Windows on ARM (WOA, 如 Surface) 原生版本; **不兼容 x64**; 内容同上 (`*-arm64.*`) |
    | `windows-msi`               | `format-tex-windows-x86_64.msi`, `format-tex-windows-arm64.msi` |
    | `format-tex-macos-arm64`    | 图形界面版、命令行版 (arm64) 以及 `.dmg` 安装镜像 (`format-tex-gui-macos-arm64.dmg`) |
    | `format-tex-linux-x86_64`   | 图形界面版与命令行版 (x86_64) |
 
    每个平台的二进制在 CI 上均通过冒烟测试 (中文 English 中文 → 中文 English 中文)。
+   每个产物都带 `SHA256SUMS.txt`, 下载后可用 `Get-FileHash <文件> -Algorithm
+   SHA256` (或 `sha256sum`) 核对.
+
+### Windows 便携版与单文件版的区别
+
+* **单文件 exe** (`format-tex-gui-windows-*.exe`): 启动时把 PyInstaller 归档
+  解压到临时目录, 归档**追加在 exe 末尾**. 若杀毒软件/WDAC 拦截或改写了这段
+  附加数据, 启动器会报 *"Could not load PyInstaller's embedded PKG archive
+  from the executable"* (这是启动器阶段的错误, 与程序代码无关).
+* **便携版 zip** (`format-tex-gui-windows-*-portable.zip`): 解压后运行其中的
+  `format-tex-gui.exe`; 归档位于同目录的 `_internal/`, 不使用追加数据,
+  因此不受上述拦截影响. **推荐 WOA / 受管控设备使用**, 或直接使用 MSI.
+* 若仍被拦截: 把文件解压/复制到**本地非同步目录** (避免 OneDrive 等"按需
+  文件"占位符), 右键 → 属性 → 勾选"解除锁定" (或 `Unblock-File`), 必要时为
+  该目录添加杀毒软件排除项. 二进制**未签名**, 无法通过签名彻底避免误报.
 
 ### Windows 安装包 (MSI)
 

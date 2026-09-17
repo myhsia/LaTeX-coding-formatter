@@ -114,6 +114,21 @@ jobs:
           # install the CLI under a platform-neutral name
           cp "dist/format-tex-${{ matrix.suffix }}.exe" payload/format-tex.exe
           ls payload | head
+      - name: Build portable onedir ZIP (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          # A onefile exe carries PyInstaller's archive appended to the
+          # executable; if antivirus/WDAC strips or blocks that overlay the
+          # bootloader reports "Could not load PyInstaller's embedded PKG
+          # archive". The onedir build keeps the archive in _internal/ next
+          # to the exe, so this ZIP is the portable, onefile-free option.
+          python - "dist/format-tex-gui-${{ matrix.suffix }}-portable" <<'PY'
+          import shutil
+          import sys
+          shutil.make_archive(sys.argv[1], 'zip', 'payload')
+          PY
+          ls -lh dist/*portable.zip
       - name: Upload Windows MSI payload
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v7
@@ -227,6 +242,25 @@ jobs:
           grep -q "<string>UDZO</string>" /tmp/dmg_info.plist
           test "$(stat -f%z dist/format-tex-gui-macos-arm64.dmg)" -gt 10000000
           ls -lh dist/*.dmg
+      - name: Checksums
+        shell: bash
+        run: |
+          # per-file hashes so a truncated/blocked download is obvious;
+          # directories (the macOS .app) and the sums file are skipped
+          cd dist
+          : > SHA256SUMS.txt
+          for f in *; do
+            [ -f "$f" ] || continue
+            if [ "$f" = "SHA256SUMS.txt" ]; then
+              continue
+            fi
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$f" >> SHA256SUMS.txt
+            else
+              shasum -a 256 "$f" >> SHA256SUMS.txt
+            fi
+          done
+          cat SHA256SUMS.txt
       - uses: actions/upload-artifact@v7
         with:
           name: format-tex-${{ matrix.suffix }}
