@@ -96,12 +96,34 @@ SELECTION_TINT = QColor(120, 120, 128, 30)    # hover tint
 
 
 class SpacerWidget(QWidget):
-    """Invisible layout slot: reserves the space a native control takes."""
+    """Invisible layout slot: reserves the space a native control takes.
+
+    This is the native parent of every hosted Win32 control, so it must not
+    be translucent on Windows: ``WA_TranslucentBackground`` sets
+    ``WA_NoSystemBackground`` and feeds Qt's window format alpha, which for
+    a ``WS_CHILD`` host makes Qt set ``WS_EX_LAYERED`` - and a layered
+    window does not render its child HWNDs, so the controls disappeared.
+    Windows therefore paints an opaque fill matching the surface behind
+    the slot (the native control keeps a transparent ``WM_CTLCOLOR``
+    brush, so it still blends). macOS keeps the translucent slot it needs
+    for the AppKit views drawn over it."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setStyleSheet('background: transparent;')
+        if sys.platform == 'win32':
+            self.setAutoFillBackground(True)
+        else:
+            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground,
+                              True)
+            self.setStyleSheet('background: transparent;')
+
+    def set_background(self, colour):
+        """Windows: fill the host with the colour of the surface behind it."""
+        if sys.platform != 'win32' or colour is None:
+            return
+        palette = self.palette()
+        palette.setColor(QPalette.ColorRole.Window, colour)
+        self.setPalette(palette)
 
 
 class OptionControl:
@@ -145,6 +167,7 @@ class OptionControl:
     def _build_win32(self):
         from win32_controls import Win32Checkbox
 
+        self.slot.set_background(self.window.content_bg)
         try:
             self.native = Win32Checkbox(
                 self.window, self.slot, self.title, self.checked,
@@ -234,6 +257,7 @@ class PopUpControl:
     def _build_win32(self):
         from win32_controls import Win32PopUp
 
+        self.slot.set_background(self.window.content_bg)
         try:
             self.native = Win32PopUp(
                 self.window, self.slot, self.items, self.current,
@@ -319,6 +343,7 @@ class ButtonControl:
     def _build_win32(self):
         from win32_controls import Win32PushButton
 
+        self.slot.set_background(self.window.content_bg)
         try:
             self.native = Win32PushButton(self.window, self.slot, self.title,
                                           on_click=self.on_click)
@@ -383,6 +408,7 @@ class LabelControl:
     def _build_win32(self):
         from win32_controls import Win32Label
 
+        self.slot.set_background(self.window.content_bg)
         try:
             self.native = Win32Label(self.window, self.slot, self._text)
         except Exception:
@@ -2540,35 +2566,111 @@ class MainWindow(QMainWindow):
         return ok
 
     def _self_test_win32_geometry(self, note):
-        """DPI diagnostics: Qt's logical rect next to the Win32 device rects.
+        """DPI/compositing diagnostics for the hosted Win32 controls.
 
-        At 400% scaling the two coordinate spaces differ 4x, so logging both
-        (host client area vs. child window rect) makes a mis-sized or
-        off-screen hosted control obvious in the CI log. Windows only;
-        diagnostics never fail the run."""
+        Logs, for the top-level and for the file-list and option hosts, the
+        Win32 style/exstyle (``WS_EX_LAYERED`` etc.), visibility, parent,
+        window region, z-order and screen rect next to Qt's expectation - a
+        hosted control that Qt thinks is placed correctly but that Windows
+        will not render shows up here. Windows only; never fails the run.
+
+        Two stable lines are emitted for CI: ``win32 host mode`` and
+        ``win32 host layered`` (the latter must stay False: a layered host
+        does not render its child HWNDs, which is why every control over a
+        translucent ``SpacerWidget`` disappeared)."""
         if sys.platform != 'win32':
             return
         try:
             import ctypes
             from ctypes import wintypes
 
+            WS_VISIBLE = 0x10000000
+            WS_CHILD = 0x40000000
+            WS_EX_LAYERED = 0x00080000
+            WS_EX_TRANSPARENT = 0x00000020
+            WS_EX_NOREDIRECTIONBITMAP = 0x00200000
+            GWLP_STYLE = -16
+            GWLP_EXSTYLE = -20
+            GW_HWNDPREV = 3
+
             user32 = ctypes.WinDLL('user32', use_last_error=True)
+            gdi32 = ctypes.WinDLL('gdi32', use_last_error=True)
             user32.GetClientRect.restype = wintypes.BOOL
             user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.c_void_p]
             user32.GetWindowRect.restype = wintypes.BOOL
             user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.c_void_p]
+            user32.IsWindowVisible.restype = wintypes.BOOL
+            user32.IsWindowVisible.argtypes = [wintypes.HWND]
+            user32.GetParent.restype = wintypes.HWND
+            user32.GetParent.argtypes = [wintypes.HWND]
+            user32.GetWindow.restype = wintypes.HWND
+            user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+            user32.GetWindowRgn.restype = ctypes.c_int
+            user32.GetWindowRgn.argtypes = [wintypes.HWND, ctypes.c_void_p]
+            gdi32.CreateRectRgn.restype = ctypes.c_void_p
+            gdi32.CreateRectRgn.argtypes = [ctypes.c_int] * 4
+            gdi32.DeleteObject.restype = wintypes.BOOL
+            gdi32.DeleteObject.argtypes = [ctypes.c_void_p]
+            getter = (getattr(user32, 'GetWindowLongPtrW', None)
+                      or user32.GetWindowLongW)
+            getter.restype = ctypes.c_ssize_t
+            getter.argtypes = [wintypes.HWND, ctypes.c_int]
 
-            def measure(hwnd, fn):
+            def style_of(hwnd):
+                if not hwnd:
+                    return None
+                try:
+                    return (int(getter(wintypes.HWND(hwnd), GWLP_STYLE)),
+                            int(getter(wintypes.HWND(hwnd), GWLP_EXSTYLE)))
+                except Exception:
+                    return None
+
+            def flag_text(hwnd):
+                pair = style_of(hwnd)
+                if pair is None:
+                    return 'none'
+                style, ex = pair
+                bits = []
+                if style & WS_VISIBLE:
+                    bits.append('visible')
+                if style & WS_CHILD:
+                    bits.append('child')
+                if ex & WS_EX_LAYERED:
+                    bits.append('LAYERED')
+                if ex & WS_EX_TRANSPARENT:
+                    bits.append('transparent')
+                if ex & WS_EX_NOREDIRECTIONBITMAP:
+                    bits.append('noredirection')
+                return 'style=0x%x ex=0x%x [%s]' % (
+                    style, ex, ','.join(bits) if bits else '-')
+
+            def rect(hwnd, fn):
                 if not hwnd:
                     return None
                 box = wintypes.RECT()
                 try:
                     if fn(wintypes.HWND(hwnd), ctypes.byref(box)):
-                        return (box.right - box.left,
-                                box.bottom - box.top)
+                        return (box.left, box.top,
+                                box.right - box.left, box.bottom - box.top)
                 except Exception:
                     pass
                 return None
+
+            def region(hwnd):
+                if not hwnd:
+                    return 'none'
+                handle = gdi32.CreateRectRgn(0, 0, 0, 0)
+                try:
+                    kind = int(user32.GetWindowRgn(wintypes.HWND(hwnd),
+                                                   handle))
+                    return {0: 'none', 1: 'empty', 2: 'simple',
+                            3: 'complex'}.get(kind, str(kind))
+                finally:
+                    gdi32.DeleteObject(handle)
+
+            def visible(hwnd):
+                return bool(hwnd) and bool(
+                    user32.IsWindowVisible(wintypes.HWND(hwnd)))
 
             def report(label, native):
                 slot = getattr(native, 'slot', None)
@@ -2578,20 +2680,57 @@ class MainWindow(QMainWindow):
                     dpr = float(slot.devicePixelRatioF())
                 except Exception:
                     dpr = 1.0
+                host = getattr(native, '_host', None)
+                child = getattr(native, '_hwnd', None)
                 qrect = slot.rect()
-                note('win32 geometry {}: dpr {} qt {}x{} host client {} '
-                     'child window {}'.format(
-                         label, dpr, qrect.width(), qrect.height(),
-                         measure(getattr(native, '_host', None),
-                                 user32.GetClientRect),
-                         measure(getattr(native, '_hwnd', None),
-                                 user32.GetWindowRect)))
+                expected = None
+                try:
+                    from PySide6.QtCore import QPoint
 
-            files = getattr(self.files_view, 'native', None)
+                    pos = slot.mapToGlobal(QPoint(0, 0))
+                    expected = (int(pos.x()), int(pos.y()))
+                except Exception:
+                    pass
+                note('win32 geometry {}: dpr {} qt {}x{} screen-expected {} '
+                     'host client {}'.format(
+                         label, dpr, qrect.width(), qrect.height(),
+                         expected, rect(host, user32.GetClientRect)))
+                note('win32 host {}: {} visible {} child {} child window {} '
+                     'child visible {} host region {} z-prev {}'.format(
+                         label, flag_text(host), visible(host),
+                         flag_text(child), rect(child, user32.GetWindowRect),
+                         visible(child), region(host),
+                         rect(user32.GetWindow(child, GW_HWNDPREV),
+                              user32.GetWindowRect)))
+                parent = None
+                try:
+                    if child:
+                        parent = int(user32.GetParent(
+                            wintypes.HWND(child)) or 0)
+                except Exception:
+                    parent = None
+                note('win32 child {}: parent {} host-match {}'.format(
+                    label, parent, parent == int(host) if host else False))
+
+            targets = []
+            files = getattr(getattr(self, 'files_view', None), 'native', None)
             if getattr(files, 'slot', None) is not None:
-                report('list', files)
-            for _slot, wrapper in self._option_widgets:
-                report('option', getattr(wrapper, 'native', wrapper))
+                targets.append(('list', files))
+            for _slot, wrapper in getattr(self, '_option_widgets', ()):
+                target = getattr(wrapper, 'native', None)
+                if getattr(target, 'slot', None) is not None:
+                    targets.append(('option', target))
+            for label, native in targets:
+                report(label, native)
+
+            layered = False
+            for _label, native in targets:
+                pair = style_of(getattr(native, '_host', None))
+                if pair is not None and pair[1] & WS_EX_LAYERED:
+                    layered = True
+            note('win32 host mode: {}'.format(
+                os.environ.get('FORMAT_TEX_NATIVE_HOST', 'slot')))
+            note('win32 host layered: {}'.format(layered))
         except Exception as exc:
             note('win32 geometry failed: {}: {}'.format(
                 type(exc).__name__, exc))

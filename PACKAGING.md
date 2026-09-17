@@ -157,9 +157,22 @@ Windows 的其余控件同样是真正的 Win32 控件 (`win32_controls.py`, 覆
 `COMBOBOX` + `CBS_DROPDOWNLIST` (下拉高度用 `CB_SETMINVISIBLE` 与控件高度
 解耦), "应用格式化" = `BUTTON` + `BS_PUSHBUTTON`, 状态栏 = `STATIC`
 (`WM_CTLCOLORSTATIC`/`WM_CTLCOLORBTN` 返回 `NULL_BRUSH` + 透明背景, 以贴合
-Qt 面板); 字体取系统消息字体 (`SPI_GETNONCLIENTMETRICS`). 通知经槽位窗口的
-WndProc 子类以 `WM_COMMAND` 送达. 所有 Win32 调用同样显式声明
-`argtypes`/`restype`, 并按 `devicePixelRatio` 换算坐标.
+Qt 面板); 字体按 Qt 字体的像素高度 × `devicePixelRatio` 生成, 控件再经
+`WM_SETFONT` 应用. 通知统一由宿主的**单一** WndProc 分发
+(`WM_COMMAND` 按控件 ID、`WM_CTLCOLOR*` 按子窗口句柄), 不再为每个控件
+嵌套一层子类. 所有 Win32 调用显式声明 `argtypes`/`restype`.
+
+宿主槽位 (`SpacerWidget`) 在 Windows 上**不能**使用
+`WA_TranslucentBackground`: 该属性会让 Qt 给子窗口设置 `WS_EX_LAYERED`,
+而分层窗口不会绘制其子 HWND, 于是所有原生控件都不显示 (选项面板、下拉、
+按钮、状态栏曾因此全部消失). Windows 改为不透明填充以贴合背后的面板;
+macOS 仍保留半透明槽位. 自检会输出 `win32 host layered: False` 并在 CI
+中强制要求该行为, 防止回归.
+
+控件默认挂在各自的槽位 HWND 上; 设置环境变量
+`FORMAT_TEX_NATIVE_HOST=window` 可改为直接挂到顶层窗口并按
+`slot.mapTo(window) × devicePixelRatio` 定位 (顶层窗口永不分层),
+作为排障/兜底路径.
 
 自检报告 `native controls: options 6/6 ext … enc … apply … status …` 以及
 各镜像回合 (复选框状态、按钮启用、标签文本、编码下拉), CI 在 Windows 上

@@ -21,6 +21,7 @@ toolkit draws the control. Anything that fails returns ``False`` from
 """
 
 import ctypes
+import os
 import sys
 from ctypes import wintypes
 
@@ -108,11 +109,96 @@ WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wintypes.HWND, wintypes.UINT,
 
 _NEXT_ID = [100]
 _FONT = None
+# host HWND -> {'proc', 'old', 'controls', 'user32', 'gdi32', 'setter'}
+_HOSTS = {}
+_DEFWINDOWPROC = [None]
 
 
 def _as_ptr(obj):
     """A ``c_void_p`` for a ctypes instance (safe for pointer-sized params)."""
     return ctypes.cast(ctypes.byref(obj), ctypes.c_void_p)
+
+
+def _install_host(control):
+    """Install one shared WndProc on the control's host window.
+
+    Every control on a host shares a single subclass (in ``window`` mode
+    they all sit on the top-level window), so notifications are dispatched
+    to all of them at once instead of nesting one proc per control."""
+    host = control._host
+    entry = _HOSTS.get(host)
+    if entry is None:
+        proc = WNDPROC(_host_proc)
+        # register before subclassing so no message can arrive while the
+        # shared proc is installed but unknown
+        entry = {'proc': proc, 'old': None, 'controls': set(),
+                 'user32': control._user32, 'gdi32': control._gdi32,
+                 'setter': control._setter}
+        _HOSTS[host] = entry
+        entry['old'] = control._setter(
+            host, GWLP_WNDPROC, ctypes.cast(proc, ctypes.c_void_p))
+    entry['controls'].add(control)
+
+
+def _release_host(control):
+    entry = _HOSTS.get(control._host)
+    if entry is None:
+        return
+    entry['controls'].discard(control)
+    if entry['controls']:
+        return
+    # restore first, then forget: our proc must never run with no entry
+    try:
+        if entry['old']:
+            entry['setter'](control._host, GWLP_WNDPROC, entry['old'])
+    except Exception:
+        pass
+    _HOSTS.pop(control._host, None)
+
+
+def _find_control(host, predicate):
+    entry = _HOSTS.get(host)
+    if entry is None:
+        return None
+    for control in entry['controls']:
+        try:
+            if predicate(control):
+                return control
+        except Exception:
+            continue
+    return None
+
+
+def _host_proc(hwnd, msg, wparam, lparam):
+    entry = _HOSTS.get(int(hwnd))
+    if entry is not None:
+        try:
+            if msg == WM_COMMAND:
+                control = _find_control(
+                    int(hwnd), lambda c: (int(wparam) & 0xFFFF) == c._id)
+                if control is not None:
+                    control._command((int(wparam) >> 16) & 0xFFFF)
+            elif msg in (WM_CTLCOLORSTATIC, WM_CTLCOLORBTN):
+                control = _find_control(
+                    int(hwnd),
+                    lambda c: (c.transparent and c._hwnd is not None
+                               and int(lparam or 0) == c._hwnd))
+                if control is not None:
+                    control._gdi32.SetTextColor(wparam, control._fg)
+                    control._gdi32.SetBkMode(wparam, TRANSPARENT)
+                    return int(control._null_brush or 0)
+            elif msg == WM_NCDESTROY:
+                for control in list(entry['controls']):
+                    _release_host(control)
+        except Exception:
+            pass
+    if entry is not None and entry['old']:
+        return entry['user32'].CallWindowProcW(
+            entry['old'], hwnd, msg, WPARAM(wparam), LPARAM(lparam))
+    user32 = _DEFWINDOWPROC[0]
+    if user32 is not None:
+        return user32.DefWindowProcW(hwnd, msg, WPARAM(wparam), LPARAM(lparam))
+    return 0
 
 
 def _next_id():
@@ -184,8 +270,6 @@ class _Win32Control:
         self.active = False
         self._hwnd = None
         self._host = None
-        self._old_proc = None
-        self._proc_ref = None
         self._font = None
         self._null_brush = None
         self._fg = 0
@@ -226,6 +310,9 @@ class _Win32Control:
         u.CallWindowProcW.restype = LRESULT
         u.CallWindowProcW.argtypes = [ctypes.c_void_p, wintypes.HWND,
                                       wintypes.UINT, WPARAM, LPARAM]
+        u.DefWindowProcW.restype = LRESULT
+        u.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, WPARAM,
+                                     LPARAM]
         setter = getattr(u, 'SetWindowLongPtrW', None) or u.SetWindowLongW
         setter.restype = ctypes.c_void_p
         setter.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
@@ -243,25 +330,45 @@ class _Win32Control:
         self._gdi32 = g
         self._setter = setter
         self._null_brush = g.GetStockObject(NULL_BRUSH)
+        _DEFWINDOWPROC[0] = u
 
-    def _slot_size(self):
-        """The slot's client area in device pixels.
+    def _host_mode(self):
+        """``slot`` (default) hosts in the slot's own HWND; ``window``
+        parents the control straight to the top-level window."""
+        return os.environ.get('FORMAT_TEX_NATIVE_HOST', 'slot').strip().lower()
 
-        The host HWND's ``GetClientRect`` is authoritative at any DPI;
-        mixing Qt's logical rect with a manual ``devicePixelRatioF`` scale
-        drifts (and leaves stale sizes when the ratio changes).
-        """
+    def _target_rect(self):
+        """``(x, y, width, height)`` in device pixels for ``MoveWindow``.
+
+        ``window`` mode maps the slot into the top-level window (which is
+        never layered, unlike a translucent child host); ``slot`` mode uses
+        the slot's own client area. ``GetClientRect`` is authoritative at
+        any DPI, so no manual scaling is needed there."""
+        if self._host_mode() == 'window':
+            try:
+                from PySide6.QtCore import QPoint
+
+                ratio = float(self.window.devicePixelRatioF())
+                pos = self.slot.mapTo(self.window, QPoint(0, 0))
+                width = max(1, self.slot.width())
+                height = max(1, self.slot.height())
+                return (int(round(pos.x() * ratio)),
+                        int(round(pos.y() * ratio)),
+                        max(1, int(round(width * ratio))),
+                        max(1, int(round(height * ratio))))
+            except Exception:
+                pass
         try:
             rect = wintypes.RECT()
             if self._user32.GetClientRect(self._host, _as_ptr(rect)):
                 width = rect.right - rect.left
                 height = rect.bottom - rect.top
                 if width > 0 and height > 0:
-                    return (width, height)
+                    return (0, 0, width, height)
         except Exception:
             pass
         rect = self.slot.rect()
-        return (max(1, rect.width()), max(1, rect.height()))
+        return (0, 0, max(1, rect.width()), max(1, rect.height()))
 
     def _text_colour(self):
         try:
@@ -272,26 +379,29 @@ class _Win32Control:
         except Exception:
             return 0
 
-    def _frame(self, width, height):
+    def _frame(self, x, y, width, height):
         """Top-left/width/height for ``MoveWindow`` (combos override)."""
-        return (0, 0, width, height)
+        return (x, y, width, height)
 
     def _create(self, class_name, style, text=''):
         self._load()
-        self._host = int(self.slot.winId())      # forces the slot native
+        if self._host_mode() == 'window':
+            self._host = int(self.window.winId())
+        else:
+            self._host = int(self.slot.winId())  # forces the slot native
         self._font = make_control_font(self.slot, self._user32, self._gdi32)
         self._fg = self._text_colour()
-        width, height = self._slot_size()
+        x, y, width, height = self._target_rect()
         hwnd = self._user32.CreateWindowExW(
             0, class_name, text, WS_CHILD | WS_VISIBLE | style,
-            0, 0, width, height, self._host, self._id, None, None)
+            x, y, width, height, self._host, self._id, None, None)
         if not hwnd:
             return False
         self._hwnd = hwnd
         self.active = True
         if self._font:
             self._user32.SendMessageW(hwnd, WM_SETFONT, self._font, True)
-        self._subclass_host()
+        _install_host(self)
         self._hwnd_hook()
         self.place()
         self._user32.ShowWindow(self._hwnd,
@@ -327,9 +437,9 @@ class _Win32Control:
         if self._hwnd is None:
             return
         try:
-            width, height = self._slot_size()
-            x, y, w, h = self._frame(width, height)
-            self._user32.MoveWindow(self._hwnd, x, y, w, h, True)
+            x, y, width, height = self._target_rect()
+            fx, fy, fw, fh = self._frame(x, y, width, height)
+            self._user32.MoveWindow(self._hwnd, fx, fy, fw, fh, True)
             self._user32.ShowWindow(
                 self._hwnd, 5 if self.slot.isVisible() else 0)
         except Exception:
@@ -348,39 +458,6 @@ class _Win32Control:
             return (float(rect.right), float(rect.bottom))
         except Exception:
             return (0.0, 0.0)
-
-    # ---------- host subclass ----------
-    def _subclass_host(self):
-        self._proc_ref = WNDPROC(self._host_proc)
-        self._old_proc = self._setter(
-            self._host, GWLP_WNDPROC,
-            ctypes.cast(self._proc_ref, ctypes.c_void_p))
-
-    def _host_proc(self, hwnd, msg, wparam, lparam):
-        try:
-            if msg == WM_COMMAND:
-                if (int(wparam) & 0xFFFF) == self._id:
-                    self._command((int(wparam) >> 16) & 0xFFFF)
-            elif (self.transparent
-                    and msg in (WM_CTLCOLORSTATIC, WM_CTLCOLORBTN)
-                    and self._hwnd is not None
-                    and int(lparam or 0) == self._hwnd):
-                self._gdi32.SetTextColor(wparam, self._fg)
-                self._gdi32.SetBkMode(wparam, TRANSPARENT)
-                return int(self._null_brush or 0)
-            elif msg == WM_NCDESTROY:
-                self._restore_host()
-        except Exception:
-            pass
-        return self._user32.CallWindowProcW(self._old_proc, hwnd, msg,
-                                            WPARAM(wparam), LPARAM(lparam))
-
-    def _restore_host(self):
-        try:
-            if self._old_proc:
-                self._setter(self._host, GWLP_WNDPROC, self._old_proc)
-        except Exception:
-            pass
 
     def _command(self, code):
         """A notification for this control (override)."""
@@ -455,13 +532,13 @@ class Win32PopUp(_Win32Control):
         self._user32.SendMessageW(self._hwnd, CB_SETMINVISIBLE, 8, 0)
         self.setCurrentText(self._current)
 
-    def _frame(self, width, height):
+    def _frame(self, x, y, width, height):
         closed = int(self._user32.SendMessageW(
             self._hwnd, CB_GETITEMHEIGHT, -1, 0))
         if closed <= 0:
             closed = height
-        y = max(0, (height - closed) // 2)
-        return (0, y, width, closed)
+        y = y + max(0, (height - closed) // 2)
+        return (x, y, width, closed)
 
     def _command(self, code):
         if code != CBN_SELCHANGE:

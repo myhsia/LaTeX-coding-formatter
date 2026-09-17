@@ -191,6 +191,9 @@ jobs:
           grep -q 'file list: natTrue/active:True' format_tex_gui_selftest.txt
           # ... and the native Win32 option checkboxes.
           grep -q 'native controls: options 6/6' format_tex_gui_selftest.txt
+          # ... and the host must not be layered (a layered host does not
+          # render its child HWNDs, which hid every hosted control).
+          grep -q 'win32 host layered: False' format_tex_gui_selftest.txt
       - name: Build DMG (macOS)
         if: runner.os == 'macOS'
         shell: bash
