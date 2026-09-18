@@ -30,6 +30,12 @@ _DARK = {
     'muted': 'rgba(255, 255, 255, 0.40)',
     'popup': '#2b2b2b',
     'hairline': '#3a3a3a',
+    'card': '#2b2b2b',
+    'card_border': 'rgba(255, 255, 255, 0.07)',
+    'icon_hover': 'rgba(255, 255, 255, 0.10)',
+    'icon_press': 'rgba(255, 255, 255, 0.06)',
+    'menubar': '#1f1f1f',
+    'menu': '#2b2b2b',
 }
 _LIGHT = {
     'fill': '#ffffff',
@@ -40,6 +46,12 @@ _LIGHT = {
     'muted': 'rgba(0, 0, 0, 0.35)',
     'popup': '#ffffff',
     'hairline': '#e2e2e2',
+    'card': '#ffffff',
+    'card_border': 'rgba(0, 0, 0, 0.08)',
+    'icon_hover': 'rgba(0, 0, 0, 0.06)',
+    'icon_press': 'rgba(0, 0, 0, 0.10)',
+    'menubar': '#f3f3f3',
+    'menu': '#f9f9f9',
 }
 
 
@@ -261,3 +273,54 @@ def apply_label(widget, dark=True):
     widget.setStyleSheet(
         'background: transparent; border: none; color: {text};'
         ' padding-top: 2px;'.format(text=colours['text']))
+
+
+def apply_card(widget, dark=True):
+    """Win11 Settings-style card (file-list panel, sidebar group)."""
+    colours = _palette(dark)
+    name = widget.objectName()
+    selector = '#{}'.format(name) if name else 'QFrame'
+    widget.setStyleSheet(
+        '{selector} {{ background-color: {card};'
+        ' border: 1px solid {border}; border-radius: 8px; }}'
+        .format(selector=selector, card=colours['card'],
+                border=colours['card_border']))
+
+
+def apply_icon_button(widget, dark=True):
+    """Subtle Win11 icon button (the file-list +/- controls)."""
+    colours = _palette(dark)
+    widget.setStyleSheet(
+        'QPushButton {{ border: none; background: transparent;'
+        ' color: {text}; font-size: 16px; padding: 0px;'
+        ' border-radius: 4px; }}'
+        'QPushButton:hover {{ background-color: {hover}; }}'
+        'QPushButton:pressed {{ background-color: {press}; }}'
+        'QPushButton:disabled {{ color: {muted}; }}'
+        .format(text=colours['text'], hover=colours['icon_hover'],
+                press=colours['icon_press'], muted=colours['muted']))
+
+
+def apply_menubar(bar, dark=True):
+    """Title-bar-tinted menu bar with dark rounded popups."""
+    colours = _palette(dark)
+    accent = _accent(dark).name()
+    text = _accent_text(_accent(dark)).name()
+    bar.setStyleSheet(
+        'QMenuBar {{ background-color: {menubar}; color: {text};'
+        ' border: none; }}'
+        'QMenuBar::item {{ background: transparent; padding: 5px 10px;'
+        ' border-radius: 4px; }}'
+        'QMenuBar::item:selected {{ background-color: {hover}; }}'
+        'QMenuBar::item:pressed {{ background-color: {press}; }}'
+        'QMenu {{ background-color: {menu}; color: {text};'
+        ' border: 1px solid {border}; border-radius: 6px; padding: 4px; }}'
+        'QMenu::item {{ padding: 5px 22px; border-radius: 4px; }}'
+        'QMenu::item:selected {{ background-color: {accent};'
+        ' color: {accent_text}; }}'
+        'QMenu::separator {{ height: 1px; background: {border};'
+        ' margin: 4px 8px; }}'
+        .format(menubar=colours['menubar'], menu=colours['menu'],
+                text=colours['text'], hover=colours['icon_hover'],
+                press=colours['icon_press'], border=colours['border'],
+                accent=accent, accent_text=text))

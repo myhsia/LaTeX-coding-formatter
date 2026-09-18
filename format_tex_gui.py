@@ -104,6 +104,55 @@ def detect_dark(app):
             return False
 
 
+_WIN_USER32 = [None]
+
+
+def _win_user32():
+    """user32 with DefWindowProcW declared (lazy, Windows only)."""
+    user32 = _WIN_USER32[0]
+    if user32 is None:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.WinDLL('user32', use_last_error=True)
+        user32.DefWindowProcW.restype = ctypes.c_ssize_t
+        user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT,
+                                          ctypes.c_size_t, ctypes.c_ssize_t]
+        _WIN_USER32[0] = user32
+    return user32
+
+
+def _win_lr_resize_hit(message):
+    """Remap a WM_NCHITTEST result so no left/right resize cursor appears.
+
+    The window width is locked (only the height may change), so the LR
+    borders should not advertise a resize cursor. Returns the replacement
+    hit value, or None when the message is not WM_NCHITTEST or the hit is
+    already fine. Windows only."""
+    if sys.platform != 'win32':
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _MSG(ctypes.Structure):
+            _fields_ = [('hwnd', wintypes.HWND), ('message', wintypes.UINT),
+                        ('wParam', ctypes.c_size_t),
+                        ('lParam', ctypes.c_ssize_t),
+                        ('time', wintypes.DWORD), ('pt', wintypes.POINT)]
+
+        msg = ctypes.cast(int(message), ctypes.POINTER(_MSG)).contents
+        if int(msg.message) != 0x0084:            # WM_NCHITTEST
+            return None
+        hit = int(_win_user32().DefWindowProcW(
+            wintypes.HWND(msg.hwnd), wintypes.UINT(0x0084),
+            ctypes.c_size_t(msg.wParam), ctypes.c_ssize_t(msg.lParam)))
+        # HTLEFT/HTRIGHT -> HTBORDER, corners -> the top/bottom edge
+        return {10: 18, 11: 18, 13: 12, 14: 12, 16: 15, 17: 15}.get(hit)
+    except Exception:
+        return None
+
+
 ROLE_PATH = Qt.ItemDataRole.UserRole          # full path of the row
 ROLE_ROOT = Qt.ItemDataRole.UserRole + 1      # scanned root for backups
 
@@ -689,6 +738,8 @@ class MainWindow(QMainWindow):
         group.setStyleSheet(
             '#group { background: rgba(120, 120, 128, 0.12);'
             ' border-radius: 8px; }')
+        if sys.platform == 'win32':
+            win11_style.apply_card(group, self.dark)
         gv = QVBoxLayout(group)
         gv.setContentsMargins(10, 0, 10, 0)
         gv.setSpacing(0)
@@ -757,6 +808,8 @@ class MainWindow(QMainWindow):
         frame.setStyleSheet(
             '#fileframe { border: 1px solid rgba(120, 120, 128, 0.28);'
             ' border-radius: 8px; }')
+        if sys.platform == 'win32':
+            win11_style.apply_card(frame, self.dark)
         flv = QVBoxLayout(frame)
         flv.setContentsMargins(1, 1, 1, 1)
         flv.setSpacing(0)
@@ -794,6 +847,9 @@ class MainWindow(QMainWindow):
         self.btn_remove.setToolTip('从列表移除所选文件')
         self.btn_remove.setEnabled(False)
         self.btn_remove.clicked.connect(self._remove_selected)
+        if sys.platform == 'win32':
+            win11_style.apply_icon_button(self.btn_add, self.dark)
+            win11_style.apply_icon_button(self.btn_remove, self.dark)
         divider = QFrame()
         self.pm_divider = divider
         divider.setObjectName('plusminussep')
@@ -950,9 +1006,12 @@ class MainWindow(QMainWindow):
 
             advance = QFontMetricsF(
                 self.output.font()).horizontalAdvance('M')
+            # fixed width only: do NOT set MSWindowsFixedSizeDialogHint,
+            # which makes Windows use the shorter WS_DLGFRAME caption (and
+            # so short min/max/close buttons); the standard caption is the
+            # one Windows 11's own apps use. Qt clamps the drag via
+            # WM_GETMINMAXINFO, and nativeEvent() hides the LR cursors.
             self.setFixedWidth(math.ceil(232 + 40 + 80 * advance))
-            self.setWindowFlag(
-                Qt.WindowType.MSWindowsFixedSizeDialogHint, True)
         except Exception:
             pass
 
@@ -966,6 +1025,18 @@ class MainWindow(QMainWindow):
         if ev.type() == QEvent.Type.WinIdChange and self._effects_applied:
             self.apply_window_effects()
         return super().event(ev)
+
+    def nativeEvent(self, event_type, message):
+        # Windows: the width is locked, so hide the LR resize cursors (the
+        # height may still be resized). See _win_lr_resize_hit.
+        try:
+            if sys.platform == 'win32' and b'windows' in bytes(event_type):
+                mapped = _win_lr_resize_hit(message)
+                if mapped is not None:
+                    return True, mapped
+        except Exception:
+            pass
+        return super().nativeEvent(event_type, message)
 
     def set_status(self, text, encoding=None, selected=None):
         """Update the status line (lives at the bottom of the content
@@ -1038,6 +1109,8 @@ class MainWindow(QMainWindow):
         silently did nothing and only Cmd+Q worked."""
         bar = self.menuBar()
         bar.setNativeMenuBar(True)
+        if sys.platform == 'win32':
+            win11_style.apply_menubar(bar, self.dark)
 
         def action(menu, text, key, slot, std=False):
             item = QAction(text, self)
@@ -2365,6 +2438,11 @@ class MainWindow(QMainWindow):
             note('file list: nat{}/active:{}'.format(
                 getattr(self.files_view, 'native', False),
                 getattr(self.files_view, 'active', 'n/a')))
+            try:
+                note('qt style: {}'.format(
+                    QApplication.style().objectName()))
+            except Exception:
+                pass
             visible = bool(self.isVisible())
             note('window visible: {}'.format(visible))
             ok = ok and visible

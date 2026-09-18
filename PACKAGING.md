@@ -180,12 +180,23 @@ Qt 自带的 `windows11` (滚动条等一并现代化), 否则用自绘样式兜
   列表 (选中项为强调色 + 对比文字)、强调色填充的主按钮、透明的状态文字;
 * 强调色经 `platform_effects.native_accent_color` 读取
   (`HKCU\...\DWM\AccentColor`, 回退 `DwmGetColorizationColor`/Qt Highlight),
-  文字按亮度取黑/白; 深/浅色各自一组配色.
+  文字按亮度取黑/白; 深/浅色各自一组配色;
+* 其他 Qt 部件也走 Win11 风格: 文件列表面板与侧边栏分组是 Win11 卡片
+  (`apply_card`), `+`/`−` 是 Win11 图标按钮 (`apply_icon_button`),
+  File/Edit/Window 菜单栏为标题栏同色 + 圆角悬停与深色弹出菜单
+  (`apply_menubar`).
 
-自检报告 `controls: qt (options 0/6 …)` (macOS 为 `controls: native`), 以及
-复选框、按钮启用、状态文本、编码下拉的回合; CI 在 Windows 上强制要求
-`controls: qt`。文件列表仍是原生 `SysListView32`, 自检仍要求
-`file list: natTrue/active:True` 与 `win32 host layered: False`.
+**标题栏按钮高度**: 窗口**不**使用 `MSWindowsFixedSizeDialogHint` (该标志让
+Windows 采用较矮的 `WS_DLGFRAME` 对话框标题栏, 使最小化/最大化/关闭按钮比
+系统应用矮)。仅用 `setFixedWidth` 锁定宽度 (Qt 经 `WM_GETMINMAXINFO` 限制),
+因此标题栏是标准高度; `nativeEvent()` 在 `WM_NCHITTEST` 上把左右/角命中改为
+边框/上下, 不再显示左右拉伸光标 (高度仍可调).
+
+自检报告 `controls: qt (options 0/6 …)` (macOS 为 `controls: native`)、
+`qt style: <名称>` 以及复选框、按钮启用、状态文本、编码下拉的回合; CI 在
+Windows 上强制要求 `controls: qt` 与 `qt style:`。文件列表仍是原生
+`SysListView32`, 自检仍要求 `file list: natTrue/active:True` 与
+`win32 host layered: False`.
 
 Linux 也使用 Qt 控件 (Fusion/系统样式); 由于 Linux 没有可嵌入的原生控件
 工具包, 该平台不计划原生视图.

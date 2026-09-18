@@ -206,6 +206,7 @@ jobs:
           grep -q 'file list: natTrue/active:True' format_tex_gui_selftest.txt
           # ... and the option controls are drawn by Qt (Win11 dark style).
           grep -q 'controls: qt' format_tex_gui_selftest.txt
+          grep -q 'qt style:' format_tex_gui_selftest.txt
           # ... and the host must not be layered (a layered host does not
           # render its child HWNDs, which hid every hosted control).
           grep -q 'win32 host layered: False' format_tex_gui_selftest.txt
