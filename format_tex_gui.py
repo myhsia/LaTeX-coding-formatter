@@ -70,6 +70,7 @@ from platform_effects import (apply_effects, arrange_in_front,
                               reposition_materials, set_sidebar_width,
                               set_native_plus_minus_enabled, title_gap,
                               zoom_window)
+import win11_style
 
 ENCODINGS = ['同输入', 'utf-8', 'gb18030', 'gbk', 'gb2312', 'big5',
              'utf-16', 'latin-1']
@@ -111,62 +112,15 @@ SELECTION_TINT = QColor(120, 120, 128, 30)    # hover tint
 
 
 class SpacerWidget(QWidget):
-    """Invisible layout slot: reserves the space a native control takes.
+    """Chromeless slot that reserves the space a control occupies.
 
-    This is the native parent of every hosted Win32 control, so it must not
-    be translucent on Windows: ``WA_TranslucentBackground`` sets
-    ``WA_NoSystemBackground`` and feeds Qt's window format alpha, which for
-    a ``WS_CHILD`` host makes Qt set ``WS_EX_LAYERED`` - and a layered
-    window does not render its child HWNDs, so the controls disappeared.
-    Windows therefore paints an opaque fill matching the surface behind
-    the slot (the native control keeps a transparent ``WM_CTLCOLOR``
-    brush, so it still blends). macOS keeps the translucent slot it needs
-    for the AppKit views drawn over it."""
+    macOS draws its native AppKit view over this transparent slot; on
+    Windows/Linux it simply holds the Qt control."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        if sys.platform == 'win32':
-            self.setAutoFillBackground(True)
-        else:
-            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground,
-                              True)
-            self.setStyleSheet('background: transparent;')
-
-    def set_background(self, colour):
-        """Windows: fill the host with the colour of the surface behind it."""
-        if sys.platform != 'win32' or colour is None:
-            return
-        palette = self.palette()
-        palette.setColor(QPalette.ColorRole.Window, colour)
-        self.setPalette(palette)
-
-
-def _fit_native_slot(window, slot, native):
-    """Grow a native control's slot to the size the Win32 control needs.
-
-    The native font's CJK fallback can be wider than Qt's ``sizeHint``, so
-    a slot sized from ``sizeHint`` clips the label (visible at 400%). The
-    control reports its ideal size in device pixels; convert back to
-    logical and never shrink."""
-    if native is None or not getattr(native, 'active', False):
-        return
-    try:
-        size = native.ideal_size()
-    except Exception:
-        size = None
-    if not size:
-        return
-    try:
-        ratio = float(slot.devicePixelRatioF()) or 1.0
-    except Exception:
-        ratio = 1.0
-    width = int(round(size[0] / ratio)) + 4
-    height = int(round(size[1] / ratio)) + 2
-    current = slot.size()
-    new_width = max(current.width(), width)
-    new_height = max(current.height(), height)
-    if (new_width, new_height) != (current.width(), current.height()):
-        slot.setFixedSize(new_width, new_height)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setStyleSheet('background: transparent;')
 
 
 class OptionControl:
@@ -185,8 +139,8 @@ class OptionControl:
         self.native = None
 
     def build_native(self):
-        if sys.platform == 'win32':
-            return self._build_win32()
+        # Windows/Linux: Qt draws it (Windows uses the Win11 dark style);
+        # macOS: a native NSButton over the transparent slot.
         if sys.platform != 'darwin':
             self._use_qt()
             return False
@@ -207,35 +161,16 @@ class OptionControl:
             self._use_qt()
         return built
 
-    def _build_win32(self):
-        from win32_controls import Win32Checkbox
-
-        self.slot.set_background(self.window.content_bg)
-        try:
-            self.native = Win32Checkbox(
-                self.window, self.slot, self.title, self.checked,
-                on_toggle=self._toggled)
-        except Exception:
-            self.native = None
-        built = bool(self.native is not None and self.native.build())
-        if built:
-            _fit_native_slot(self.window, self.slot, self.native)
-            self.window._reflow_options()
-            self.qt.setChecked(self.checked)
-            self.qt.setVisible(False)
-            return True
-        self.native = None
-        self._use_qt()
-        return False
-
     def _use_qt(self):
-        """Fallback: the Qt checkbox was never laid out (the grid holds the
-        slot), so make it a visible child of the slot instead."""
+        """The Qt checkbox was never laid out (the grid holds the slot), so
+        make it a visible child of the slot instead."""
         if self.qt.parent() is not self.slot:
             self.qt.setParent(self.slot)
             box = QVBoxLayout(self.slot)
             box.setContentsMargins(0, 0, 0, 0)
             box.addWidget(self.qt)
+        if sys.platform == 'win32':
+            win11_style.apply_checkbox(self.qt, self.window.dark)
         self.qt.setVisible(True)
 
     def _toggled(self, checked):
@@ -277,9 +212,8 @@ class PopUpControl:
         self.slot.setFixedSize(max(90, qt.sizeHint().width() + 10), 24)
 
     def build_native(self):
-        if sys.platform == 'win32':
-            return self._build_win32()
         if sys.platform != 'darwin':
+            self._use_qt()
             return False
         from native_mac import NativePopUpButton
 
@@ -299,24 +233,11 @@ class PopUpControl:
             self.qt.setVisible(True)
         return built
 
-    def _build_win32(self):
-        from win32_controls import Win32PopUp
-
-        self.slot.set_background(self.window.content_bg)
-        try:
-            self.native = Win32PopUp(
-                self.window, self.slot, self.items, self.current,
-                on_change=self._changed, custom_label=self.custom_label)
-        except Exception:
-            self.native = None
-        built = bool(self.native is not None and self.native.build())
-        if built:
-            _fit_native_slot(self.window, self.slot, self.native)
-            self.qt.setVisible(False)
-            return True
-        self.native = None
+    def _use_qt(self):
+        self.slot.setVisible(False)
+        if sys.platform == 'win32':
+            win11_style.apply_combo(self.qt, self.window.dark)
         self.qt.setVisible(True)
-        return False
 
     def _changed(self, title):
         # the custom entry reuses the Qt dialog flow, then mirrors the
@@ -367,9 +288,8 @@ class ButtonControl:
                                max(qt.sizeHint().height(), 26))
 
     def build_native(self):
-        if sys.platform == 'win32':
-            return self._build_win32()
         if sys.platform != 'darwin':
+            self._use_qt()
             return False
         from native_mac import NativePushButton
 
@@ -386,23 +306,11 @@ class ButtonControl:
             self.qt.setVisible(True)
         return built
 
-    def _build_win32(self):
-        from win32_controls import Win32PushButton
-
-        self.slot.set_background(self.window.content_bg)
-        try:
-            self.native = Win32PushButton(self.window, self.slot, self.title,
-                                          on_click=self.on_click)
-        except Exception:
-            self.native = None
-        built = bool(self.native is not None and self.native.build())
-        if built:
-            _fit_native_slot(self.window, self.slot, self.native)
-            self.qt.setVisible(False)
-            return True
-        self.native = None
+    def _use_qt(self):
+        self.slot.setVisible(False)
+        if sys.platform == 'win32':
+            win11_style.apply_button(self.qt, self.window.dark)
         self.qt.setVisible(True)
-        return False
 
     def setEnabled(self, value):
         self.qt.setEnabled(bool(value))
@@ -434,9 +342,8 @@ class LabelControl:
         self.slot.setMinimumWidth(60)
 
     def build_native(self):
-        if sys.platform == 'win32':
-            return self._build_win32()
         if sys.platform != 'darwin':
+            self._use_qt()
             return False
         from native_mac import NativeLabel
 
@@ -452,22 +359,10 @@ class LabelControl:
             self.qt.setVisible(True)
         return built
 
-    def _build_win32(self):
-        from win32_controls import Win32Label
-
-        self.slot.set_background(self.window.content_bg)
-        try:
-            self.native = Win32Label(self.window, self.slot, self._text)
-        except Exception:
-            self.native = None
-        built = bool(self.native is not None and self.native.build())
-        if built:
-            _fit_native_slot(self.window, self.slot, self.native)
-            self.qt.setVisible(False)
-            return True
-        self.native = None
-        self.qt.setVisible(True)
-        return False
+    def _use_qt(self):
+        self.slot.setVisible(False)
+        if sys.platform == 'win32':
+            win11_style.apply_label(self.qt, self.window.dark)
 
     def setText(self, text):
         self._text = str(text)
@@ -578,8 +473,7 @@ class DropListWidget(QListWidget):
 
         playout.addStretch(1)
         muted = self.palette().color(QPalette.ColorRole.PlaceholderText)
-        self._hint = QLabel('Click or drag and drop files/folders '
-                            'into the box')
+        self._hint = QLabel('You can drag and drop here')
         self._hint.setWordWrap(True)
         self._hint.setMaximumWidth(380)
         self._hint.setAlignment(Qt.AlignmentFlag.AlignHCenter
@@ -751,17 +645,6 @@ class MainWindow(QMainWindow):
 
         self.dark = detect_dark(QApplication.instance())
         self.pal = DARK if self.dark else LIGHT
-        if sys.platform == 'win32' and not os.environ.get(
-                'FORMAT_TEX_NO_DARK'):
-            # select the common-controls theme before any window exists
-            try:
-                from win32_controls import configure_dark
-
-                _selftest_note('configure_dark start')
-                configure_dark(self.dark)
-                _selftest_note('configure_dark done')
-            except Exception:
-                pass
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -2568,11 +2451,12 @@ class MainWindow(QMainWindow):
         return ok
 
     def _self_test_controls(self, note):
-        """Report which native controls are hosting and, where they are,
-        check that they mirror the Qt model (state, text, enable, popup).
+        """Check the option/combo/button/status controls.
 
-        On Windows every control should host a real Win32 widget; on Linux
-        nothing does (Qt is the only toolkit), which is reported as 0/6."""
+        Windows and Linux draw these with Qt (Windows uses the Win11 dark
+        style); macOS hosts native AppKit views. The checks read the
+        effective state, which falls back to the Qt widget, so they cover
+        both backends. CI asserts ``controls: qt`` on Windows."""
         def native_on(wrapper):
             native = getattr(wrapper, 'native', None)
             return bool(native is not None
@@ -2580,69 +2464,59 @@ class MainWindow(QMainWindow):
 
         options = [wr for _s, wr in self._option_widgets]
         active = sum(1 for wr in options if native_on(wr))
-        note('native controls: options {}/{} ext {} enc {} apply {} '
-             'status {}'.format(
-                 active, len(options), native_on(self.ext_edit),
-                 native_on(self.enc_out), native_on(self.btn_apply),
-                 native_on(self.status_label)))
+        note('controls: {} (options {}/{} ext {} enc {} apply {} '
+             'status {})'.format(
+                 'native' if active else 'qt', active, len(options),
+                 native_on(self.ext_edit), native_on(self.enc_out),
+                 native_on(self.btn_apply), native_on(self.status_label)))
         ok = True
 
-        if active:
-            probe = self.chk_check
-            before = probe.isChecked()
-            probe.setChecked(not before)
-            QApplication.processEvents()
-            mirror = (probe.isChecked() != before
-                      and probe.qt.isChecked() == probe.isChecked())
-            if native_on(probe):
-                mirror = mirror and (
-                    probe.native.isChecked() == probe.isChecked())
-            probe.setChecked(before)
-            note('native checkbox toggle round-trip: {}'.format(mirror))
-            ok = ok and mirror
+        probe = self.chk_check
+        before = probe.isChecked()
+        probe.setChecked(not before)
+        QApplication.processEvents()
+        mirror = (probe.isChecked() != before
+                  and probe.qt.isChecked() == probe.isChecked())
+        if native_on(probe):
+            mirror = mirror and (probe.native.isChecked() == probe.isChecked())
+        probe.setChecked(before)
+        note('checkbox toggle round-trip: {}'.format(mirror))
+        ok = ok and mirror
 
-        if native_on(self.btn_apply):
-            self.btn_apply.setEnabled(False)
-            disabled = not self.btn_apply.native.isEnabled()
-            self.btn_apply.setEnabled(True)
-            enabled = self.btn_apply.native.isEnabled()
-            note('native apply button disabled/enabled: {}/{}'.format(
-                disabled, enabled))
-            ok = ok and disabled and enabled
+        self.btn_apply.setEnabled(False)
+        disabled = not self.btn_apply.qt.isEnabled()
+        self.btn_apply.setEnabled(True)
+        enabled = self.btn_apply.qt.isEnabled()
+        note('apply button disabled/enabled: {}/{}'.format(disabled, enabled))
+        ok = ok and disabled and enabled
 
-        if native_on(self.status_label):
-            probe = '状态检查'
-            self.status_label.setText(probe)
-            label_ok = (self.status_label.text() == probe
-                        and self.status_label.native.text() == probe)
-            self.status_label.setText('就绪')
-            note('native status label text mirrors: {}'.format(label_ok))
-            ok = ok and label_ok
+        status_probe = '状态检查'
+        self.status_label.setText(status_probe)
+        label_ok = self.status_label.text() == status_probe
+        self.status_label.setText('就绪')
+        note('status label text: {}'.format(label_ok))
+        ok = ok and label_ok
 
-        if native_on(self.enc_out):
-            popup_ok = self.enc_out.currentText() == '同输入'
-            self.enc_out.setCurrentText('utf-8')
-            popup_ok = popup_ok and (
-                self.enc_out.currentText() == 'utf-8'
-                and self.enc_out.qt.currentText() == 'utf-8')
-            self.enc_out.setCurrentText('同输入')
-            note('native encoding popup round-trip: {}'.format(popup_ok))
-            ok = ok and popup_ok
+        popup_ok = self.enc_out.currentText() == '同输入'
+        self.enc_out.setCurrentText('utf-8')
+        popup_ok = popup_ok and (
+            self.enc_out.currentText() == 'utf-8'
+            and self.enc_out.qt.currentText() == 'utf-8')
+        self.enc_out.setCurrentText('同输入')
+        note('encoding popup round-trip: {}'.format(popup_ok))
+        ok = ok and popup_ok
         return ok
 
     def _self_test_win32_geometry(self, note):
-        """DPI/compositing diagnostics for the hosted Win32 controls.
+        """DPI/compositing diagnostics for the native file list.
 
-        Logs, for the top-level and for the file-list and option hosts, the
-        Win32 style/exstyle (``WS_EX_LAYERED`` etc.), visibility, parent,
-        window region, z-order and screen rect next to Qt's expectation - a
-        hosted control that Qt thinks is placed correctly but that Windows
-        will not render shows up here. Windows only; never fails the run.
+        Logs the list host's Win32 style/exstyle (``WS_EX_LAYERED`` etc.),
+        visibility, parent, window region, z-order and screen rect next to
+        Qt's expectation. Windows only; never fails the run.
 
         Two stable lines are emitted for CI: ``win32 host mode`` and
         ``win32 host layered`` (the latter must stay False: a layered host
-        does not render its child HWNDs, which is why every control over a
-        translucent ``SpacerWidget`` disappeared)."""
+        does not render its child HWNDs)."""
         if sys.platform != 'win32':
             return
         try:
@@ -2813,14 +2687,13 @@ class MainWindow(QMainWindow):
                          getattr(native, '_ctlcolor_hits', 0),
                          sample(child), sample(host)))
 
+            adapter = getattr(self, 'files_view', None)
+            files = getattr(adapter, 'view', None)
+            if files is None:
+                files = getattr(adapter, 'native', None)
             targets = []
-            files = getattr(getattr(self, 'files_view', None), 'native', None)
             if getattr(files, 'slot', None) is not None:
                 targets.append(('list', files))
-            for _slot, wrapper in getattr(self, '_option_widgets', ()):
-                target = getattr(wrapper, 'native', None)
-                if getattr(target, 'slot', None) is not None:
-                    targets.append(('option', target))
             for label, native in targets:
                 report(label, native)
 
@@ -3084,7 +2957,10 @@ def main():
     _selftest_note('main start')
     app = QApplication(sys.argv)
     app.setApplicationName('LaTeX Coding Style Formatter')
-    if sys.platform.startswith('linux') and detect_dark(app):
+    if sys.platform == 'win32':
+        # prefer Qt's own Windows 11 style for scrollbars and the rest
+        win11_style.install(app)
+    elif sys.platform.startswith('linux') and detect_dark(app):
         app.setStyle('Fusion')
     _selftest_note('constructing MainWindow')
     window = MainWindow()

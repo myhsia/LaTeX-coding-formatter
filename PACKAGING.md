@@ -167,48 +167,28 @@ shell 文件图标 (`SHGetFileInfoW` + `ImageList`)、资源管理器拖放
 回退), 但 CI 的 Windows 自检会**强制要求** `file list: natTrue/active:True`
 (即原生列表确实生效), 而不是仅要求 `PASS`.
 
-Windows 的其余控件同样是真正的 Win32 控件 (`win32_controls.py`, 覆盖在 Qt
-槽位之上): 6 个选项复选框 = `BUTTON` + `BS_AUTOCHECKBOX`, 两个下拉 =
-`COMBOBOX` + `CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS`,
-"应用格式化" = `BUTTON` + `BS_PUSHBUTTON`, 状态栏 = `STATIC`
-(`WM_CTLCOLORSTATIC`/`WM_CTLCOLORBTN`/`WM_CTLCOLORLISTBOX` 返回按 Qt 调色板
-生成的**实心**画刷 + 文本色, 下拉高度用 `CB_SETMINVISIBLE` 与控件高度解耦);
-字体按 Qt 字体的像素高度 × `devicePixelRatio` 生成, 控件再经 `WM_SETFONT`
-应用. 通知统一由宿主的**单一** WndProc 分发 (`WM_COMMAND` 按控件 ID、
-`WM_CTLCOLOR*` 按子窗口句柄、`WM_DRAWITEM`/`WM_MEASUREITEM` 自绘), 不再为
-每个控件嵌套一层子类. 所有 Win32 调用显式声明 `argtypes`/`restype`.
+**其余控件由 Qt 绘制, 使用 Windows 11 深色样式** (`win11_style.py`): 6 个选项
+复选框、两个下拉 (扩展名 / 输出编码)、"应用格式化" 按钮与状态栏文字。
+Windows 11 的圆角/控件填充/系统强调色属于 WinUI, 经典 Win32 公共控件无法
+做到 (早期版本用 `win32_controls.py` 宿主原生控件, 结果背景发灰、下拉与
+按钮为旧式直角), 因此改为 Qt。`win11_style.install()` 在可用时把应用样式设为
+Qt 自带的 `windows11` (滚动条等一并现代化), 否则用自绘样式兜底:
 
-**深色模式**: `SetPreferredAppMode`(序号 135, `GetProcAddress` 解析, 调用失败
-则优雅降级) 设定进程主题, 每个控件再经 `AllowDarkModeForWindow`(133) +
-`SetWindowTheme`(`DarkMode_Explorer`; 下拉用 `DarkMode_CFD`) 单独启用; 旧版
-Windows 无这些入口时退回 `SetWindowTheme(hwnd,'','')`, 由实心画刷/文本色保证
-深色可读. 下拉的**展开列表**是 owner-draw (`WM_MEASUREITEM`/`WM_DRAWITEM`),
-按 `content_bg`/`WindowText` 绘制, 选中项用**系统强调色** (读取
-`HKCU\...\DWM\AccentColor`, 回退 `DwmGetColorizationColor`/Qt Highlight) 并以
-亮度选取黑/白文字, 因此展开的下拉在深色模式下也是深色的.
+* `QProxyStyle` 绘制勾选框指示器 (圆角方块, 选中填充系统强调色并画对勾) 与
+  下拉箭头 (人字形);
+* 每个下拉/按钮/状态标签各自的 QSS: 圆角 5px 的深色输入框、深色圆角弹出
+  列表 (选中项为强调色 + 对比文字)、强调色填充的主按钮、透明的状态文字;
+* 强调色经 `platform_effects.native_accent_color` 读取
+  (`HKCU\...\DWM\AccentColor`, 回退 `DwmGetColorizationColor`/Qt Highlight),
+  文字按亮度取黑/白; 深/浅色各自一组配色.
 
-选项槽位按原生控件的**理想尺寸** (`BCM_GETIDEALSIZE`, 回退
-`GetTextExtentPoint32W` + 控件装饰) ÷ `devicePixelRatio` 调整, 避免 CJK 回退
-字体比 Qt `sizeHint` 宽时标签被裁切 (400% 缩放下可见).
+自检报告 `controls: qt (options 0/6 …)` (macOS 为 `controls: native`), 以及
+复选框、按钮启用、状态文本、编码下拉的回合; CI 在 Windows 上强制要求
+`controls: qt`。文件列表仍是原生 `SysListView32`, 自检仍要求
+`file list: natTrue/active:True` 与 `win32 host layered: False`.
 
-宿主槽位 (`SpacerWidget`) 在 Windows 上**不能**使用
-`WA_TranslucentBackground`: 该属性会让 Qt 给子窗口设置 `WS_EX_LAYERED`,
-而分层窗口不会绘制其子 HWND, 于是所有原生控件都不显示 (选项面板、下拉、
-按钮、状态栏曾因此全部消失). Windows 改为不透明填充以贴合背后的面板;
-macOS 仍保留半透明槽位. 自检会输出 `win32 host layered: False` 并在 CI
-中强制要求该行为, 防止回归.
-
-控件默认挂在各自的槽位 HWND 上; 设置环境变量
-`FORMAT_TEX_NATIVE_HOST=window` 可改为直接挂到顶层窗口并按
-`slot.mapTo(window) × devicePixelRatio` 定位 (顶层窗口永不分层),
-作为排障/兜底路径.
-
-自检报告 `native controls: options 6/6 ext … enc … apply … status …` 以及
-各镜像回合 (复选框状态、按钮启用、标签文本、编码下拉), CI 在 Windows 上
-强制要求 `options 6/6`.
-
-Linux 仍使用 Qt 列表与 Qt 控件; 由于 Linux 没有可嵌入的原生控件工具包,
-该平台不计划原生视图.
+Linux 也使用 Qt 控件 (Fusion/系统样式); 由于 Linux 没有可嵌入的原生控件
+工具包, 该平台不计划原生视图.
 
 ### macOS 菜单与快捷键
 

@@ -126,6 +126,88 @@ def _as_ptr(obj):
     return ctypes.cast(ctypes.byref(obj), ctypes.c_void_p)
 
 
+class LOGFONTW(ctypes.Structure):
+    _fields_ = [
+        ('lfHeight', ctypes.c_long), ('lfWidth', ctypes.c_long),
+        ('lfEscapement', ctypes.c_long), ('lfOrientation', ctypes.c_long),
+        ('lfWeight', ctypes.c_long), ('lfItalic', ctypes.c_byte),
+        ('lfUnderline', ctypes.c_byte), ('lfStrikeOut', ctypes.c_byte),
+        ('lfCharSet', ctypes.c_byte), ('lfOutPrecision', ctypes.c_byte),
+        ('lfClipPrecision', ctypes.c_byte), ('lfQuality', ctypes.c_byte),
+        ('lfPitchAndFamily', ctypes.c_byte),
+        ('lfFaceName', wintypes.WCHAR * 32),
+    ]
+
+
+class NONCLIENTMETRICSW(ctypes.Structure):
+    _fields_ = [
+        ('cbSize', wintypes.UINT), ('iBorderWidth', ctypes.c_int),
+        ('iScrollWidth', ctypes.c_int), ('iScrollHeight', ctypes.c_int),
+        ('iCaptionWidth', ctypes.c_int), ('iCaptionHeight', ctypes.c_int),
+        ('lfCaptionFont', LOGFONTW),
+        ('iSmCaptionWidth', ctypes.c_int),
+        ('iSmCaptionHeight', ctypes.c_int),
+        ('lfSmCaptionFont', LOGFONTW),
+        ('iMenuWidth', ctypes.c_int), ('iMenuHeight', ctypes.c_int),
+        ('lfMenuFont', LOGFONTW), ('lfStatusFont', LOGFONTW),
+        ('lfMessageFont', LOGFONTW),
+        ('iPaddedBorderWidth', ctypes.c_int),
+    ]
+
+
+SPI_GETNONCLIENTMETRICS = 0x0029
+_FONT = None
+
+
+def _message_font(user32, gdi32):
+    """The shell's message font (Segoe UI on modern Windows)."""
+    try:
+        metrics = NONCLIENTMETRICSW()
+        metrics.cbSize = ctypes.sizeof(NONCLIENTMETRICSW)
+        if user32.SystemParametersInfoW(
+                SPI_GETNONCLIENTMETRICS, metrics.cbSize, _as_ptr(metrics), 0):
+            return gdi32.CreateFontIndirectW(_as_ptr(metrics.lfMessageFont))
+    except Exception:
+        pass
+    return None
+
+
+def make_control_font(slot, user32, gdi32):
+    """A Win32 font matching the slot's Qt font, scaled for the window DPI.
+
+    Win32 controls have no notion of ``devicePixelRatio``: a font has to be
+    created with a pixel height. Taking the Qt point size at the *logical*
+    DPI makes the text half-size on a 200% display, so the Qt font's pixel
+    metrics are multiplied by the slot's device pixel ratio to get the
+    physical height. The font is shared (the file list is the only hosted
+    control left)."""
+    global _FONT
+    if _FONT is not None:
+        return _FONT
+    try:
+        from PySide6.QtGui import QFontMetricsF
+
+        font = slot.font()
+        try:
+            ratio = float(slot.devicePixelRatioF())
+        except Exception:
+            ratio = 1.0
+        metrics = QFontMetricsF(font)
+        height = int(round((metrics.ascent() + metrics.descent()) * ratio))
+        logfont = LOGFONTW()
+        logfont.lfHeight = -max(1, height)
+        logfont.lfWeight = 700 if font.bold() else 400
+        logfont.lfCharSet = 1                # DEFAULT_CHARSET
+        logfont.lfQuality = 5                # CLEARTYPE_QUALITY
+        logfont.lfFaceName = str(font.family())[:31]
+        _FONT = gdi32.CreateFontIndirectW(_as_ptr(logfont))
+    except Exception:
+        _FONT = None
+    if _FONT is None:
+        _FONT = _message_font(user32, gdi32)
+    return _FONT
+
+
 class Win32FileList:
     """A ``SysListView32`` file list hosted in a Qt widget's HWND."""
 
@@ -190,6 +272,9 @@ class Win32FileList:
 
         g.CreateFontIndirectW.restype = ctypes.c_void_p
         g.CreateFontIndirectW.argtypes = [ctypes.c_void_p]
+        u.SystemParametersInfoW.restype = wintypes.BOOL
+        u.SystemParametersInfoW.argtypes = [wintypes.UINT, wintypes.UINT,
+                                            ctypes.c_void_p, wintypes.UINT]
 
         setter = getattr(u, 'SetWindowLongPtrW', None) or u.SetWindowLongW
         setter.restype = ctypes.c_void_p
@@ -276,12 +361,10 @@ class Win32FileList:
         """Scale the row font for the display DPI.
 
         ``SysListView32`` ships with a fixed 8 pt default that is tiny at
-        400% scaling; reuse the Qt font mapping from ``win32_controls`` so
-        the list matches the rest of the window.
+        400% scaling; map the Qt font so the list matches the rest of the
+        window.
         """
         try:
-            from win32_controls import make_control_font
-
             self._font = make_control_font(self.slot, self._user32,
                                            self._gdi32)
             if self._font:

@@ -88,7 +88,7 @@ jobs:
           --distpath dist --workpath pyibuild --specpath pyibuild
           --hidden-import filelist_view --hidden-import diff_view
           --hidden-import format_tex_controller
-          --hidden-import win32_list --hidden-import win32_controls
+          --hidden-import win32_list --hidden-import win11_style
           --hidden-import format_tex_theme
           $PYINSTALLER_EXCLUDES format_tex_gui.py
       - name: Build CLI (onefile)
@@ -204,8 +204,8 @@ jobs:
           # Windows must actually host the native SysListView32, not the
           # Qt fallback: fail loudly if the native list did not activate.
           grep -q 'file list: natTrue/active:True' format_tex_gui_selftest.txt
-          # ... and the native Win32 option checkboxes.
-          grep -q 'native controls: options 6/6' format_tex_gui_selftest.txt
+          # ... and the option controls are drawn by Qt (Win11 dark style).
+          grep -q 'controls: qt' format_tex_gui_selftest.txt
           # ... and the host must not be layered (a layered host does not
           # render its child HWNDs, which hid every hosted control).
           grep -q 'win32 host layered: False' format_tex_gui_selftest.txt
