@@ -186,6 +186,8 @@ class OptionControl:
         self.checked = bool(checked)
         self.window = window
         self.native = None
+        # any option change re-renders the preview of the selection
+        qt.toggled.connect(self._changed)
 
     def build_native(self):
         # Windows/Linux: Qt draws it (Windows uses the Win11 dark style);
@@ -197,7 +199,7 @@ class OptionControl:
 
         self.native = NativeCheckbox(
             self.window, self.slot, self.title, self.checked,
-            on_toggle=self._toggled)
+            on_toggle=self._changed)
         built = bool(self.native.build())
         if built:
             width, height = self.native.size()
@@ -222,9 +224,16 @@ class OptionControl:
             win11_style.apply_checkbox(self.qt, self.window.dark)
         self.qt.setVisible(True)
 
-    def _toggled(self, checked):
+    def _changed(self, checked):
+        """Option toggled (Qt or native): mirror the state and refresh the
+        preview. ``blockSignals`` avoids a second refresh when the mirror
+        assignment would re-emit ``toggled``."""
         self.checked = bool(checked)
-        self.qt.setChecked(self.checked)
+        if self.qt.isChecked() != self.checked:
+            blocked = self.qt.blockSignals(True)
+            self.qt.setChecked(self.checked)
+            self.qt.blockSignals(blocked)
+        self.window._on_option_changed()
 
     def place(self):
         if self.native is not None and self.native.active:
@@ -237,9 +246,12 @@ class OptionControl:
 
     def setChecked(self, value):
         self.checked = bool(value)
-        self.qt.setChecked(self.checked)
+        # update the native control first: it is the source of truth on
+        # macOS, so the preview refresh triggered by qt.setChecked() below
+        # must already see the new state
         if self.native is not None and self.native.active:
             self.native.setChecked(self.checked)
+        self.qt.setChecked(self.checked)
 
     def isVisible(self):
         return bool(self.native is not None and self.native.isVisible()) \
@@ -2530,6 +2542,18 @@ class MainWindow(QMainWindow):
             note('selection -> tagged diff preview: {}'.format(preview_ok))
             ok = ok and preview_ok
 
+            note('toggling an option refreshes the preview')
+            self.chk_tie.setChecked(True)
+            QApplication.processEvents()
+            tie_ok = '中文~English~中文' in self._output_text()
+            self.chk_tie.setChecked(False)
+            QApplication.processEvents()
+            tie_ok = tie_ok and (
+                '中文~English~中文' not in self._output_text())
+            note('tie option toggle auto-refreshes the preview: {}'.format(
+                tie_ok))
+            ok = ok and tie_ok
+
             note('applying (write)')
             self._run(write=True, confirm=False)
             QApplication.processEvents()
@@ -2985,6 +3009,15 @@ class MainWindow(QMainWindow):
         +/- buttons and preview the selected files."""
         self._sync_list_buttons()
         self._preview_selection()
+
+    def _on_option_changed(self):
+        """A formatting option was toggled: re-render the preview so it
+        reflects the new options immediately (no file selected -> leave the
+        current output/status alone)."""
+        if getattr(self, 'controller', None) is None:
+            return
+        if self.selected_entries():
+            self.controller.preview_selection()
 
     # ---------- actions ----------
 

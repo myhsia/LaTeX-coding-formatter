@@ -271,7 +271,8 @@ class MacApp:
             slot = AppKit.NSView.alloc().init()
             slot.setFrame_(((0.0, 0.0), (10.0, 10.0)))
             host.addSubview_(slot)
-            control = NativeCheckbox(None, ViewTarget(slot), title, checked)
+            control = NativeCheckbox(None, ViewTarget(slot), title, checked,
+                                     on_toggle=self._on_option_changed)
             control.build()
             key = _key
             self.option_controls[key] = control
@@ -701,6 +702,11 @@ class MacApp:
         self.update_remove_enabled()
         self.controller.preview_selection()
 
+    def _on_option_changed(self, _checked=False):
+        """A formatting option was toggled: refresh the preview in place."""
+        if self.selected_entries():
+            self.controller.preview_selection()
+
     # ---------- error reporting ----------
     def show_error(self, text):
         try:
@@ -845,6 +851,18 @@ def run_self_test(app):
         lines.append('folder scan -> list -> preview (tagged diff): {}'
                      .format(preview_ok))
         ok = ok and preview_ok
+
+        # toggling an option refreshes the preview in place
+        tie = app.option_controls['tie']
+        tie.view.performClick_(None)
+        _pump(AppKit)
+        tie_ok = '中文~English~中文' in app.diff.text()
+        tie.view.performClick_(None)
+        _pump(AppKit)
+        tie_ok = tie_ok and '中文~English~中文' not in app.diff.text()
+        lines.append('tie option toggle auto-refreshes the preview: {}'
+                     .format(tie_ok))
+        ok = ok and tie_ok
 
         app.controller.run(True, confirm=False)
         backup = root / 'backup' / 'sub' / 'sample.tex.bak'
