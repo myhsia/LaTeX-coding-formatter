@@ -57,6 +57,12 @@ def _ruler_class():
         import AppKit
 
         class _MarkerRuler(AppKit.NSRulerView):
+            def drawSeparatorInRect_(self, rect):
+                pass                    # no separator line beside the gutter
+
+            def drawRulerLines(self):
+                pass                    # we draw the markers ourselves
+
             def drawHashMarksAndLabelsInRect_(self, rect):
                 owner = getattr(self, 'marker_owner', None)
                 if owner is not None:
