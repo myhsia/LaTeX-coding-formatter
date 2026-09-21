@@ -21,15 +21,17 @@ Rules
   stays attached; '-' is never spaced (E-mail, CPM-Nets, XXXX-XX-XX);
   full-width punctuation (、。) always stays attached.
 
-* Tie mode (``tie=True`` / ``--tie``) makes *every* separator a
-  non-breaking tie '~': the ones the formatter inserts *and* whitespace
-  already present at those boundaries, collapsed to a single '~'. Applies
-  to CJK <-> Latin (广义~Fibonacci~行列式), CJK <-> $...$ (如~$\Gamma$~排正体),
-  CJK <-> control words (无需写标题~\cite{1}), the space after \verb, and
-  the half-width punctuation gaps (式~(1)、2)~字体). The '~' before \verb
-  is used either way. A control word stays attached to a following
-  math/verb (``\cite $x$`` is left as is, matching the non-tie rules);
-  protected regions keep their internal spaces.
+* Tie mode (``tie=True`` / ``--tie``) makes every separator a non-breaking
+  tie '~': the ones the formatter inserts *and* whitespace already present
+  at those boundaries, collapsed to a single '~'. Applies to CJK <-> Latin
+  (广义~Fibonacci~行列式), CJK <-> $...$ (如~$\Gamma$~排正体), CJK ->
+  control word (无需写标题~\cite{1}, and 报}~\hfill after a group close),
+  the space after \verb, and the half-width punctuation gaps
+  (式~(1)、2)~字体). The '~' before \verb is used either way. A space
+  *after* a control word is left alone (\hfill  应 and \songti  期 keep
+  their spacing), as is control-word <-> control-word (\TT \hfill); a
+  control word also stays attached to a following math/verb (``\cite $x$``
+  is left as is). Protected regions keep their internal spaces.
 
 Never modified: verbatim environments, % comments, ``...'' quoted spans.
 
@@ -240,6 +242,22 @@ def protect(text, tight_ranges=True):
     return text, prot
 
 
+def _in_control_word(text, index):
+    """True if ``text[index]`` is a letter belonging to a ``\\controlword``.
+
+    Tie mode must never treat the trailing letters of a control word
+    (``\\hfill``, ``\\quad``, ``\\songti``) as Latin text and rewrite the
+    space that follows them."""
+    start = index
+    while start > 0:
+        ch = text[start - 1]
+        if ('A' <= ch <= 'Z') or ('a' <= ch <= 'z'):
+            start -= 1
+        else:
+            break
+    return start > 0 and text[start - 1] == '\\'
+
+
 def apply_spacing(text, punct=True, commands=True, tie=False):
     cjk = '[' + HAN + ']'
     lat = '[A-Za-z0-9]'
@@ -259,9 +277,14 @@ def apply_spacing(text, punct=True, commands=True, tie=False):
             return m.group(0)
         return m.group(1) + sep + m.group(2)
 
+    def latin_cjk(m):
+        if tie and _in_control_word(m.string, m.start(1)):
+            return m.group(0)          # trailing letters of a control word
+        return m.group(1) + sep + m.group(2)
+
     rules = [
         (f'({cjk})({lat})', r'\1' + sep + r'\2'),
-        (f'({lat})({cjk})', r'\1' + sep + r'\2'),
+        (f'({lat})({cjk})', latin_cjk),
     ]
     if punct:
         rules += [
@@ -299,16 +322,28 @@ def apply_spacing(text, punct=True, commands=True, tie=False):
                 return m.group(0)
             return m.group(1) + '~' + m.group(2)
 
+        def latin_cjk_space(m):
+            # a space *after* a control word (before CJK) is not ours to
+            # touch: \hfill  应 / \songti  期 keep their spacing
+            if _in_control_word(m.string, m.start(1)):
+                return m.group(0)
+            return m.group(1) + '~' + m.group(2)
+
+        def punct_dot_cjk(m):
+            if _in_control_word(m.string, m.start(1)):
+                return m.group(0)
+            return m.group(1) + '.~' + m.group(2)
+
         rules += [
-            (f'({cjk})[ \\t]+({lat})', r'\1~\2'),
-            (f'({lat})[ \\t]+({cjk})', r'\1~\2'),
+            (f'([A-Za-z0-9]+)[ \\t]+({cjk})', latin_cjk_space),
+            (f'({cjk})[ \\t]+([A-Za-z0-9]+)', r'\1~\2'),
             (f'({cjk})[ \\t]+({math_ph})', r'\1~\2'),
             (f'({math_ph})[ \\t]+({cjk})', r'\1~\2'),
-            (f'({math_ph})[ \\t]+({lat})', r'\1~\2'),
+            (f'({math_ph})[ \\t]+([A-Za-z0-9]+)', r'\1~\2'),
             (f'({verb_ph})[ \\t]+([{HAN}A-Za-z0-9])', r'\1~\2'),
-            (f'((?:\\\\[A-Za-z]+)|{lat})[ \\t]+({math_ph})',
+            (f'((?:\\\\[A-Za-z]+)|[A-Za-z0-9]+)[ \\t]+({math_ph})',
              latin_math_space),
-            (f'((?:\\\\[A-Za-z]+)|{lat})[ \\t]+({verb_ph})',
+            (f'((?:\\\\[A-Za-z]+)|[A-Za-z0-9]+)[ \\t]+({verb_ph})',
              latin_verb_space),
         ]
         if punct:
@@ -316,12 +351,13 @@ def apply_spacing(text, punct=True, commands=True, tie=False):
                 (f'({cjk})[ \\t]+\\(', r'\1~('),
                 (f'\\)[ \\t]+({cjk})', r')~\1'),
                 (f'({cjk})([{SENT}])[ \\t]+(?={lat})', r'\1\2~'),
-                (f'({lat})\\.[ \\t]+({cjk})', r'\1.~\2'),
+                (f'([A-Za-z0-9]+)\\.[ \\t]+({cjk})', punct_dot_cjk),
             ]
         if commands:
-            rules.append(
-                (f'({cjk})[ \\t]+(\\\\(?!textsuperscript)[A-Za-z]+)',
-                 r'\1~\2'))
+            cmd = '(\\\\(?!textsuperscript)[A-Za-z]+)'
+            # CJK ending a group (报}) before a control word, then plain CJK
+            rules.append((f'({cjk}[{{}}]*[}}])[ \\t]+' + cmd, r'\1~\2'))
+            rules.append((f'({cjk})[ \\t]+' + cmd, r'\1~\2'))
 
     total = 0
     for pattern, repl in rules:

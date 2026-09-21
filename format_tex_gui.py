@@ -2562,6 +2562,21 @@ class MainWindow(QMainWindow):
             note('tie normalizes existing whitespace: {}'.format(norm_ok))
             ok = ok and norm_ok
 
+            # spaces after a control word stay; CJK -> command ties (incl.
+            # a group close before the command)
+            cw_tie = format_source(r'\hfill  应 \quad 报} \hfill',
+                                   FormatOptions(tie=True))[0]
+            cw_ok = (r'\hfill  应' in cw_tie
+                     and r'应~\quad' in cw_tie
+                     and r'报}~\hfill' in cw_tie
+                     and r'\hfill应' == format_source(
+                         r'\hfill应', FormatOptions(tie=True))[0].splitlines()[-1]
+                     and r'无需写标题~\cite{1}' in format_source(
+                         r'无需写标题 \cite{1}', FormatOptions(tie=True))[0])
+            note('tie keeps spaces after control words, ties CJK->command: '
+                 '{}'.format(cw_ok))
+            ok = ok and cw_ok
+
             note('applying (write)')
             self._run(write=True, confirm=False)
             QApplication.processEvents()
