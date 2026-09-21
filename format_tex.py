@@ -21,6 +21,13 @@ Rules
   stays attached; '-' is never spaced (E-mail, CPM-Nets, XXXX-XX-XX);
   full-width punctuation (、。) always stays attached.
 
+* Tie mode (``tie=True`` / ``--tie``) replaces *every* space the formatter
+  inserts with a non-breaking tie '~': CJK <-> Latin (生成~pdf~文件),
+  CJK <-> $...$ (如~$\Gamma$~排正体), CJK <-> control words
+  (无需写标题~\cite{1}), the space after \verb, and the half-width
+  punctuation gaps (式~(1)、2)~字体). The '~' before \verb is used either
+  way; spaces already present in the source are left alone.
+
 Never modified: verbatim environments, % comments, ``...'' quoted spans.
 
 The CLI forces UTF-8 on stdout/stderr so CJK output works on Windows
@@ -34,6 +41,8 @@ Usage
     python3 format_tex.py --check file.tex [more.tex ...]  report only
     python3 format_tex.py --no-punct --no-commands --loose-ranges
                           --no-backup file.tex             toggle rule sets
+    python3 format_tex.py --tie file.tex                    use '~' instead
+                          of every inserted space (see above)
     python3 format_tex.py --input-encoding gb2312
                           --output-encoding utf-8 file.tex choose encodings
                           (input is auto-detected per file by default;
@@ -177,6 +186,7 @@ class FormatOptions:
     tight_ranges: bool = True
     backup: bool = True
     magic_comment: bool = True
+    tie: bool = False
     read_encoding: Optional[str] = None
     write_encoding: Optional[str] = None
 
@@ -227,43 +237,48 @@ def protect(text, tight_ranges=True):
     return text, prot
 
 
-def apply_spacing(text, punct=True, commands=True):
+def apply_spacing(text, punct=True, commands=True, tie=False):
     cjk = '[' + HAN + ']'
     lat = '[A-Za-z0-9]'
     math_ph = '\x00M\\d+\x01'
     verb_ph = '\x00V\\d+\x01'
+    # every space this function inserts uses ``sep``: '~' (a tie) when the
+    # tie option is on, a plain space otherwise
+    sep = '~' if tie else ' '
 
     def latin_math(m):
         if m.group(1).startswith('\\'):
             return m.group(0)
-        return m.group(1) + ' ' + m.group(2)
+        return m.group(1) + sep + m.group(2)
 
     def latin_verb(m):
         if m.group(1).startswith('\\'):
             return m.group(0)
-        return m.group(1) + ' ' + m.group(2)
+        return m.group(1) + sep + m.group(2)
 
     rules = [
-        (f'({cjk})({lat})', r'\1 \2'),
-        (f'({lat})({cjk})', r'\1 \2'),
+        (f'({cjk})({lat})', r'\1' + sep + r'\2'),
+        (f'({lat})({cjk})', r'\1' + sep + r'\2'),
     ]
     if punct:
         rules += [
-            (f'({cjk})\\(', r'\1 ('),
-            (f'\\)({cjk})', r') \1'),
-            (f'({cjk})([{SENT}])(?={lat})', r'\1 \2'),
-            (f'({lat})\\.({cjk})', r'\1. \2'),
+            (f'({cjk})\\(', r'\1' + sep + r'('),
+            (f'\\)({cjk})', r')' + sep + r'\1'),
+            (f'({cjk})([{SENT}])(?={lat})', r'\1' + sep + r'\2'),
+            (f'({lat})\\.({cjk})', r'\1.' + sep + r'\2'),
         ]
     rules += [
-        (f'({cjk})({math_ph})', r'\1 \2'),
-        (f'({math_ph})({cjk})', r'\1 \2'),
-        (f'({math_ph})({lat})', r'\1 \2'),
+        (f'({cjk})({math_ph})', r'\1' + sep + r'\2'),
+        (f'({math_ph})({cjk})', r'\1' + sep + r'\2'),
+        (f'({math_ph})({lat})', r'\1' + sep + r'\2'),
         (f'({cjk})({verb_ph})', r'\1~\2'),
         (f'({cjk})[ \\t]+({verb_ph})', r'\1~\2'),
-        (f'({verb_ph})([{HAN}A-Za-z0-9])', r'\1 \2'),
+        (f'({verb_ph})([{HAN}A-Za-z0-9])', r'\1' + sep + r'\2'),
     ]
     if commands:
-        rules.append((f'({cjk})(\\\\(?!textsuperscript)[A-Za-z]+)', r'\1 \2'))
+        rules.append(
+            (f'({cjk})(\\\\(?!textsuperscript)[A-Za-z]+)',
+             r'\1' + sep + r'\2'))
 
     total = 0
     for pattern, repl in rules:
@@ -286,7 +301,7 @@ def format_source(source, opts=None):
     opts = opts or FormatOptions()
     protected, prot = protect(source, tight_ranges=opts.tight_ranges)
     spaced, count = apply_spacing(
-        protected, punct=opts.punct, commands=opts.commands)
+        protected, punct=opts.punct, commands=opts.commands, tie=opts.tie)
     return prot.restore(spaced), count
 
 
@@ -455,6 +470,10 @@ def main(argv=None):
                         help='do not add spaces between CJK and control words')
     parser.add_argument('--loose-ranges', action='store_true',
                         help='space page-range dashes too (1820 $-$ 1830)')
+    parser.add_argument('--tie', action='store_true',
+                        help="insert '~' instead of a space for every "
+                             'separator the formatter adds (CJK/Latin, math, '
+                             'control words, punctuation)')
     parser.add_argument('--no-backup', action='store_true',
                         help='do not write backups into the backup/ '
                              'folder')
@@ -481,6 +500,7 @@ def main(argv=None):
         tight_ranges=not args.loose_ranges,
         backup=not args.no_backup,
         magic_comment=not args.no_magic_comment,
+        tie=args.tie,
         read_encoding=args.input_encoding,
         write_encoding=args.output_encoding,
     )

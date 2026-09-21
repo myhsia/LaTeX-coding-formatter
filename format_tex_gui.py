@@ -782,12 +782,29 @@ class MainWindow(QMainWindow):
         rec_row.addWidget(QLabel('含子目录'))
         rec_row.addStretch(1)
         self.chk_recursive = QCheckBox()
-        self.chk_recursive.setVisible(False)      # native switch is used
+        self.chk_recursive.setVisible(False)      # native/Win11 switch is used
         rec_row.addWidget(self.chk_recursive)
         self.switch_slot = QWidget()
         self.switch_slot.setFixedSize(42, 25)
         rec_row.addWidget(self.switch_slot)
         gv.addLayout(rec_row)
+        gv.addWidget(row_separator())
+
+        # backup toggle moved out of the right panel into the sidebar
+        bak_row = QHBoxLayout()
+        bak_row.setContentsMargins(0, 10, 0, 10)
+        bak_row.addWidget(QLabel('生成备份文件'))
+        bak_row.addStretch(1)
+        self.chk_backup = QCheckBox()
+        self.chk_backup.setChecked(True)          # backups on by default
+        self.chk_backup.setVisible(False)         # native/Win11 switch is used
+        bak_row.addWidget(self.chk_backup)
+        self.backup_switch_slot = QWidget()
+        self.backup_switch_slot.setFixedSize(42, 25)
+        bak_row.addWidget(self.backup_switch_slot)
+        gv.addLayout(bak_row)
+        self.rec_switch = None            # Win11Switch on Windows
+        self.backup_switch = None
         slayout.addWidget(group)
 
         # --- framed file list with a +/- bar (System Settings style) ---
@@ -896,7 +913,7 @@ class MainWindow(QMainWindow):
         option_specs = (('chk_punct', '半角标点后加空格', True),
                         ('chk_commands', 'CJK 与控制序列空格', True),
                         ('chk_tight', '页码范围保持紧凑', True),
-                        ('chk_backup', '生成备份文件 (backup/*.bak)', True),
+                        ('chk_tie', '使用 ~ 代替空格', False),
                         ('chk_magic', '添加编码魔法注释', True),
                         ('chk_check', '仅检查 (不写入文件)', False))
         self.option_checks = []
@@ -1315,33 +1332,76 @@ class MainWindow(QMainWindow):
                 and not menus.is_current():
             menus.install(self)
 
+    def _setup_switch(self, key, slot, qt_checkbox, checked, callback,
+                      existing=None):
+        """Put a switch in ``slot``: a native NSSwitch on macOS, a painted
+        Win11 switch on Windows, or the Qt checkbox elsewhere. Returns the
+        effective switch object (or None when the Qt checkbox is used)."""
+        if sys.platform == 'win32' and existing is not None:
+            existing.setChecked(checked)          # reuse on re-apply
+            return existing
+        if sys.platform == 'darwin':
+            ok = create_native_switch(self, callback, checked, key)
+            if ok:
+                view = native_switch_view(key)
+                if view is not None:
+                    frame = view.frame()
+                    slot.setFixedSize(int(round(frame.size.width)),
+                                      int(round(frame.size.height)))
+                slot.setVisible(True)
+                qt_checkbox.setVisible(False)
+                place_native_switch(self, slot, key)
+                return True
+            slot.setVisible(False)
+            qt_checkbox.setVisible(True)
+            return None
+        if sys.platform == 'win32':
+            switch = win11_style.Win11Switch(
+                slot, dark=self.dark, checked=checked)
+            box = QVBoxLayout(slot)
+            box.setContentsMargins(0, 0, 0, 0)
+            box.addWidget(switch, 0, Qt.AlignmentFlag.AlignCenter)
+            switch.toggled.connect(callback)
+            slot.setVisible(True)
+            qt_checkbox.setVisible(False)
+            return switch
+        slot.setVisible(False)
+        qt_checkbox.setVisible(True)
+        return None
+
     def _setup_native_switch(self):
-        """Use a real NSSwitch for 含子目录; fall back to the Qt
-        checkbox if it cannot be created."""
-        ok = create_native_switch(self, self._on_recursive_switch,
-                                  self.chk_recursive.isChecked())
-        if ok:
-            # reserve exactly the switch's real size in the row
-            view = native_switch_view()
-            if view is not None:
-                frame = view.frame()
-                self.switch_slot.setFixedSize(int(round(frame.size.width)),
-                                              int(round(frame.size.height)))
-            self.switch_slot.setVisible(True)
-            self.chk_recursive.setVisible(False)
-            place_native_switch(self, self.switch_slot)
-        else:
-            self.switch_slot.setVisible(False)
-            self.chk_recursive.setVisible(True)
+        """Build the 含子目录 / 生成备份文件 switches (native on macOS,
+        Win11 on Windows, Qt checkboxes elsewhere)."""
+        self.rec_switch = self._setup_switch(
+            'recursive', self.switch_slot, self.chk_recursive,
+            self.chk_recursive.isChecked(), self._on_recursive_switch,
+            existing=self.rec_switch)
+        self.backup_switch = self._setup_switch(
+            'backup', self.backup_switch_slot, self.chk_backup,
+            self.chk_backup.isChecked(), self._on_backup_switch,
+            existing=self.backup_switch)
 
     def _on_recursive_switch(self, state):
         self.chk_recursive.setChecked(bool(state))
 
+    def _on_backup_switch(self, state):
+        self.chk_backup.setChecked(bool(state))
+
     def recursive_enabled(self):
-        """含子目录 state, from the native switch when available."""
-        if has_native_switch():
-            return native_switch_state()
+        """含子目录 state, from the effective switch."""
+        if has_native_switch('recursive'):
+            return native_switch_state('recursive')
+        if sys.platform == 'win32' and self.rec_switch is not None:
+            return bool(self.rec_switch.isChecked())
         return self.chk_recursive.isChecked()
+
+    def backup_enabled(self):
+        """生成备份文件 state, from the effective switch."""
+        if has_native_switch('backup'):
+            return native_switch_state('backup')
+        if sys.platform == 'win32' and self.backup_switch is not None:
+            return bool(self.backup_switch.isChecked())
+        return self.chk_backup.isChecked()
 
     def self_test(self):
         """Assert the native window is visible, carries the 52 pt
@@ -2583,6 +2643,11 @@ class MainWindow(QMainWindow):
         self.enc_out.setCurrentText('同输入')
         note('encoding popup round-trip: {}'.format(popup_ok))
         ok = ok and popup_ok
+
+        note('backup switch default on: {}'.format(self.backup_enabled()))
+        ok = ok and self.backup_enabled()
+        note('tie option present: {}'.format(hasattr(self, 'chk_tie')))
+        ok = ok and hasattr(self, 'chk_tie')
         return ok
 
     def _self_test_win32_geometry(self, note):
@@ -2998,8 +3063,9 @@ class MainWindow(QMainWindow):
             punct=self.chk_punct.isChecked(),
             commands=self.chk_commands.isChecked(),
             tight_ranges=self.chk_tight.isChecked(),
-            backup=self.chk_backup.isChecked(),
+            backup=self.backup_enabled(),
             magic_comment=self.chk_magic.isChecked(),
+            tie=self.chk_tie.isChecked(),
             write_encoding=self.write_encoding(),
         )
 
@@ -3008,7 +3074,7 @@ class MainWindow(QMainWindow):
 
     def confirm(self, count):
         # a backup makes the write recoverable, so only warn without one
-        if self.chk_backup.isChecked():
+        if self.backup_enabled():
             return True
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Warning)

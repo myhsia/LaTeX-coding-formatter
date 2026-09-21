@@ -52,9 +52,7 @@ _BAND_VIEW = None
 _SIDEBAR_VIEW = None
 _TITLE_VIEW = None
 _SIDEBAR_WIDTH = 0.0
-_SWITCH = None
-_SWITCH_TARGET = None
-_SWITCH_SLOT = None
+_SWITCHES = {}           # key -> {'switch', 'target', 'slot'}
 _SWITCH_TARGET_CLASS = None
 _CLICK_THROUGH_CLASS = None
 _PLUS_MINUS = None
@@ -743,18 +741,19 @@ def _switch_target_class():
     return _SWITCH_TARGET_CLASS
 
 
-def create_native_switch(window, callback, on=False):
+def create_native_switch(window, callback, on=False, key='recursive'):
     """Create/insert a native NSSwitch above the Qt view (so it draws and
-    behaves natively in the sidebar). Returns True on success; callers
-    fall back to a Qt checkbox otherwise."""
-    global _SWITCH, _SWITCH_TARGET
+    behaves natively in the sidebar). ``key`` names the switch (e.g.
+    ``recursive`` / ``backup``) so several can coexist. Returns True on
+    success; callers fall back to a Qt widget otherwise."""
     if sys.platform != 'darwin':
         return False
     try:
         import objc
         import AppKit
 
-        if _SWITCH is None:
+        entry = _SWITCHES.get(key)
+        if entry is None:
             target = _switch_target_class().alloc().init()
             target.callback = callback
             switch = AppKit.NSSwitch.alloc().init()
@@ -762,36 +761,40 @@ def create_native_switch(window, callback, on=False):
             switch.setTarget_(target)
             switch.setAction_(b'switched:')
             switch.sizeToFit()
-            _SWITCH, _SWITCH_TARGET = switch, target
-        _SWITCH.setState_(AppKit.NSControlStateValueOn if on
-                          else AppKit.NSControlStateValueOff)
+            entry = {'switch': switch, 'target': target, 'slot': None}
+            _SWITCHES[key] = entry
+        entry['switch'].setState_(AppKit.NSControlStateValueOn if on
+                                  else AppKit.NSControlStateValueOff)
 
         qt_view = objc.objc_object(c_void_p=int(window.winId()))
         theme = qt_view.superview()
         try:
-            _SWITCH.removeFromSuperview()
+            entry['switch'].removeFromSuperview()
         except Exception:
             pass
-        theme.addSubview_positioned_relativeTo_(_SWITCH, AppKit.NSWindowAbove,
-                                               qt_view)
+        theme.addSubview_positioned_relativeTo_(entry['switch'],
+                                               AppKit.NSWindowAbove, qt_view)
         # once in the window the switch settles on its real size
-        _SWITCH.sizeToFit()
+        entry['switch'].sizeToFit()
         return True
     except Exception as exc:
         _note('native switch failed: {}: {}'.format(type(exc).__name__, exc))
         return False
 
 
-def place_native_switch(window, slot):
+def place_native_switch(window, slot, key='recursive'):
     """Centre the native switch over the Qt ``slot`` widget."""
-    global _SWITCH_SLOT
-    if sys.platform != 'darwin' or _SWITCH is None:
+    if sys.platform != 'darwin':
         return
-    _SWITCH_SLOT = slot
+    entry = _SWITCHES.get(key)
+    if entry is None:
+        return
+    entry['slot'] = slot
     try:
         import objc
         from PySide6.QtCore import QPoint
 
+        switch = entry['switch']
         qt_view = objc.objc_object(c_void_p=int(window.winId()))
         theme = qt_view.superview()
         top_left = slot.mapTo(window, QPoint(0, 0))
@@ -800,39 +803,42 @@ def place_native_switch(window, slot):
         rect = ((float(top_left.x()), float(top_left.y())),
                 (float(slot.width()), float(slot.height())))
         target = qt_view.convertRect_toView_(rect, theme)
-        sw_w = _SWITCH.frame().size.width
-        sw_h = _SWITCH.frame().size.height
+        sw_w = switch.frame().size.width
+        sw_h = switch.frame().size.height
         x = target.origin.x + (target.size.width - sw_w) / 2.0
         y = target.origin.y + (target.size.height - sw_h) / 2.0
-        _SWITCH.setFrame_(((x, y), (sw_w, sw_h)))
-        _SWITCH.setHidden_(False)
+        switch.setFrame_(((x, y), (sw_w, sw_h)))
+        switch.setHidden_(False)
     except Exception as exc:
         _note('native switch placement failed: {}: {}'.format(
             type(exc).__name__, exc))
 
 
-def native_switch_state():
+def native_switch_state(key='recursive'):
+    entry = _SWITCHES.get(key)
     try:
-        return bool(_SWITCH is not None and _SWITCH.state() == 1)
+        return bool(entry is not None and entry['switch'].state() == 1)
     except Exception:
         return False
 
 
-def set_native_switch_state(on):
+def set_native_switch_state(on, key='recursive'):
+    entry = _SWITCHES.get(key)
     try:
-        if _SWITCH is not None:
-            _SWITCH.setState_(1 if on else 0)
+        if entry is not None:
+            entry['switch'].setState_(1 if on else 0)
     except Exception:
         pass
 
 
-def has_native_switch():
-    return _SWITCH is not None
+def has_native_switch(key='recursive'):
+    return key in _SWITCHES
 
 
-def native_switch_view():
+def native_switch_view(key='recursive'):
     """The NSSwitch instance (for tests), or None."""
-    return _SWITCH
+    entry = _SWITCHES.get(key)
+    return entry['switch'] if entry is not None else None
 
 
 def prepare_qt(window):
@@ -870,8 +876,9 @@ def reposition_materials(window):
         _place_band(nswin, qt_view.superview())
         _place_sidebar(nswin, qt_view.superview())
         _align_titlebar(nswin)
-        if _SWITCH is not None and _SWITCH_SLOT is not None:
-            place_native_switch(window, _SWITCH_SLOT)
+        for key, entry in _SWITCHES.items():
+            if entry.get('slot') is not None:
+                place_native_switch(window, entry['slot'], key)
         if _FOOTER_VIEW is not None and _FOOTER_SLOT is not None:
             place_footer_strip(window, _FOOTER_SLOT)
         if _PLUS_MINUS is not None and _PLUS_MINUS_SLOT is not None:

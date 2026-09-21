@@ -162,6 +162,11 @@ jobs:
             smoke-root/backup/sub/t.tex.bak
           grep -q $'\xe4\xb8\xad\xe6\x96\x87 English \xe4\xb8\xad\xe6\x96\x87' \
             smoke-root/sub/t.tex
+          # --tie: every inserted separator is '~' instead of a space
+          printf '\xe4\xb8\xad\xe6\x96\x87\\cite{1}\n' > tie.tex
+          ./dist/format-tex-${{ matrix.suffix }}${{ matrix.ext }} \
+            --tie --no-backup tie.tex
+          grep -q $'\xe4\xb8\xad\xe6\x96\x87~\\cite' tie.tex
       - name: GUI self-test (macOS)
         if: runner.os == 'macOS'
         timeout-minutes: 6

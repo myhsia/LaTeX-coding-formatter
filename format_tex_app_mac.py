@@ -148,8 +148,10 @@ class MacApp:
         self.ext_label = label('扩展名')
         self.enc_label = label('输出编码')
         self.switch_label = label('含子目录')
+        self.backup_label = label('生成备份文件')
         self.group_separator = separator()
         self.group_separator2 = separator()
+        self.group_separator3 = separator()
 
         switch = AppKit.NSSwitch.alloc().init()
         # the smaller Settings-style toggle (Regular is 38x22, Small 32x18)
@@ -161,6 +163,16 @@ class MacApp:
         # the switch only adopts the small size once it is in the window
         switch.sizeToFit()
         self.switch = switch
+
+        # backup toggle (moved out of the right panel), on by default
+        backup_switch = AppKit.NSSwitch.alloc().init()
+        backup_switch.setControlSize_(AppKit.NSControlSizeSmall)
+        backup_switch.setTarget_(None)
+        backup_switch.setState_(AppKit.NSControlStateValueOn)
+        backup_switch.sizeToFit()
+        group.addSubview_(backup_switch)
+        backup_switch.sizeToFit()
+        self.backup_switch = backup_switch
 
         # empty-state hint (the Qt app's placeholder: text + two links);
         # the host doubles as a drop target while the list is empty (the
@@ -175,8 +187,7 @@ class MacApp:
         hint.setEditable_(False)
         hint.setSelectable_(False)
         hint.setAlignment_(AppKit.NSTextAlignmentCenter)
-        hint.setStringValue_('Click or drag and drop files/folders\n'
-                             'into the box')
+        hint.setStringValue_('You can drag and drop here')
         hint.setFont_(AppKit.NSFont.systemFontOfSize_(13.0))
         hint.sizeToFit()
         hint_host.addSubview_(hint)
@@ -253,7 +264,7 @@ class MacApp:
         specs = (('punct', '半角标点后加空格', True),
                  ('commands', 'CJK 与控制序列空格', True),
                  ('tight', '页码范围保持紧凑', True),
-                 ('backup', '生成备份文件 (backup/*.bak)', True),
+                 ('tie', '使用 ~ 代替空格', False),
                  ('magic', '添加编码魔法注释', True),
                  ('check', '仅检查 (不写入文件)', False))
         for _key, title, checked in specs:
@@ -361,7 +372,7 @@ class MacApp:
             import AppKit
 
             shell = self.shell
-            # group box: three Settings-style 44 pt rows with a hairline
+            # group box: four Settings-style 44 pt rows with a hairline
             # between them, label left, control right
             group = self.shell.sidebar_group
             gb = group.bounds()
@@ -369,34 +380,38 @@ class MacApp:
             margin = 0.0            # no top/bottom padding: equal 44 pt rows
             gap = 12.0
             width = gb.size.width
-            top_y = gb.size.height - margin - row_h     # bottom of row 0
-            mid_y = top_y - (row_h + 1.0)
-            bot_y = mid_y - (row_h + 1.0)
-            self.group_separator.setFrame_(
-                ((gap, top_y - 1.0), (max(1.0, width - 2 * gap), 1.0)))
-            self.group_separator2.setFrame_(
-                ((gap, mid_y - 1.0), (max(1.0, width - 2 * gap), 1.0)))
-            for field, ry in ((self.ext_label, top_y), (self.enc_label, mid_y),
-                              (self.switch_label, bot_y)):
+            rows = [gb.size.height - margin - row_h - i * (row_h + 1.0)
+                    for i in range(4)]
+            for sep, ry in ((self.group_separator, rows[0]),
+                            (self.group_separator2, rows[1]),
+                            (self.group_separator3, rows[2])):
+                sep.setFrame_(
+                    ((gap, ry - 1.0), (max(1.0, width - 2 * gap), 1.0)))
+            for field, ry in ((self.ext_label, rows[0]),
+                              (self.enc_label, rows[1]),
+                              (self.switch_label, rows[2]),
+                              (self.backup_label, rows[3])):
                 lh = field.frame().size.height
                 field.setFrameOrigin_((gap, ry + (row_h - lh) / 2.0))
             # extension popup (top row, right aligned, v-centred)
             popup = self._popup_size()
             self.ext_host.setFrame_(
-                ((width - gap - popup[0], top_y + (row_h - popup[1]) / 2.0),
+                ((width - gap - popup[0], rows[0] + (row_h - popup[1]) / 2.0),
                  (popup[0], popup[1])))
             self.ext_popup.place()
-            # encoding popup (middle row)
+            # encoding popup (second row)
             enc = self.enc_popup.size()
             self.enc_host.setFrame_(
-                ((width - gap - enc[0], mid_y + (row_h - enc[1]) / 2.0),
+                ((width - gap - enc[0], rows[1] + (row_h - enc[1]) / 2.0),
                  (enc[0], enc[1])))
             self.enc_popup.place()
-            # recursive switch (bottom row)
-            switch = self.switch.frame().size
-            self.switch.setFrameOrigin_(
-                (width - gap - switch.width,
-                 bot_y + (row_h - switch.height) / 2.0))
+            # switches: 含子目录 (third row), 生成备份文件 (fourth row)
+            for sw, ry in ((self.switch, rows[2]),
+                           (self.backup_switch, rows[3])):
+                size = sw.frame().size
+                sw.setFrameOrigin_(
+                    (width - gap - size.width,
+                     ry + (row_h - size.height) / 2.0))
 
             options = [c for _s, c in self.option_hosts]
             host = shell.content_host.bounds()
@@ -541,8 +556,9 @@ class MacApp:
             punct=self.option_controls['punct'].isChecked(),
             commands=self.option_controls['commands'].isChecked(),
             tight_ranges=self.option_controls['tight'].isChecked(),
-            backup=self.option_controls['backup'].isChecked(),
+            backup=self.backup(),
             magic_comment=self.option_controls['magic'].isChecked(),
+            tie=self.option_controls['tie'].isChecked(),
             write_encoding=self.write_encoding(),
         )
 
@@ -554,7 +570,7 @@ class MacApp:
 
     def confirm(self, count):
         # a backup makes the write recoverable, so only warn without one
-        if self.option_controls['backup'].isChecked():
+        if self.backup():
             return True
         import AppKit
 
@@ -611,6 +627,12 @@ class MacApp:
             return bool(self.switch.state() == 1)
         except Exception:
             return False
+
+    def backup(self):
+        try:
+            return bool(self.backup_switch.state() == 1)
+        except Exception:
+            return True
 
     def add_paths(self, paths):
         entries = []
@@ -857,9 +879,9 @@ def run_self_test(app):
         group_h = app.shell.sidebar_group.frame().size.height
         pitch = (app.ext_host.frame().origin.y
                  - app.enc_host.frame().origin.y)
-        rows_ok = abs(group_h - 134.0) < 1.5 and abs(pitch - 45.0) < 1.5
+        rows_ok = abs(group_h - 179.0) < 1.5 and abs(pitch - 45.0) < 1.5
         lines.append('settings-style group rows (44 pt + hairline, group '
-                     '134 pt): {}'.format(rows_ok))
+                     '179 pt): {}'.format(rows_ok))
         ok = ok and rows_ok
 
         # the sidebar is a fixed 232 pt with no divider to drag (a plain
@@ -956,11 +978,21 @@ def run_self_test(app):
                          chrome_ok))
         ok = ok and chrome_ok
 
-        # the 含子目录 toggle is the smaller Settings-style switch
-        switch_small = (app.switch.controlSize() == AppKit.NSControlSizeSmall)
-        lines.append('recursive switch uses the small control size: '
-                     '{}'.format(switch_small))
+        # the sidebar toggles are the smaller Settings-style switches
+        switch_small = (
+            app.switch.controlSize() == AppKit.NSControlSizeSmall
+            and app.backup_switch.controlSize() == AppKit.NSControlSizeSmall)
+        lines.append('sidebar switches (含子目录, 生成备份文件) use the small '
+                     'control size: {}'.format(switch_small))
         ok = ok and switch_small
+
+        # the backup toggle drives FormatOptions.backup
+        before_backup = app.backup()
+        app.backup_switch.setState_(0 if before_backup else 1)
+        backup_wired = app.backup() != before_backup
+        app.backup_switch.setState_(1 if before_backup else 0)
+        lines.append('backup switch wired to options: {}'.format(backup_wired))
+        ok = ok and backup_wired
 
         # 应用格式化 sits in the content's south-east corner
         content = app.shell.content_host.bounds()

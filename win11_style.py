@@ -16,9 +16,10 @@ rest of the carefully styled layout is untouched.
 
 import sys
 
-from PySide6.QtCore import QRectF, Qt
+from PySide6.QtCore import QRectF, QSize, Qt
 from PySide6.QtGui import (QColor, QPainter, QPainterPath, QPalette, QPen)
-from PySide6.QtWidgets import QApplication, QProxyStyle, QStyle
+from PySide6.QtWidgets import (QAbstractButton, QApplication, QProxyStyle,
+                               QStyle)
 
 # Windows 11 dark / light control colours
 _DARK = {
@@ -273,6 +274,78 @@ def apply_label(widget, dark=True):
     widget.setStyleSheet(
         'background: transparent; border: none; color: {text};'
         ' padding-top: 2px;'.format(text=colours['text']))
+
+
+class Win11Switch(QAbstractButton):
+    """A Win11-style toggle switch (pill track + sliding knob).
+
+    Qt has no built-in switch, so the sidebar rows (含子目录, 生成备份文件)
+    use this on Windows instead of a checkbox. Checkable, keyboard
+    accessible (Space) and painted with the system accent when on."""
+
+    WIDTH = 40
+    HEIGHT = 20
+
+    def __init__(self, parent=None, dark=True, checked=False):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setChecked(bool(checked))
+        self._dark = bool(dark)
+        self._accent = _accent(self._dark)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setFixedSize(self.WIDTH, self.HEIGHT)
+
+    def sizeHint(self):
+        return QSize(self.WIDTH, self.HEIGHT)
+
+    def minimumSizeHint(self):
+        return QSize(self.WIDTH, self.HEIGHT)
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        h = float(self.height())
+        w = float(self.width())
+        inset = 2.0
+        radius = h / 2.0
+        track = QRectF(0.0, 0.0, w, h)
+        if self.isChecked():
+            fill = QColor(self._accent) if self.isEnabled() \
+                else QColor(self._accent).darker(170)
+        else:
+            fill = QColor('#5a5a5a') if self._dark else QColor('#bdbdbd')
+            if not self.isEnabled():
+                fill.setAlpha(120)
+            if self.underMouse() and self.isEnabled():
+                fill = fill.lighter(112)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(fill)
+        painter.drawRoundedRect(track, radius, radius)
+        # knob
+        knob_d = h - 2.0 * inset
+        knob_x = (w - knob_d - inset) if self.isChecked() else inset
+        knob = QRectF(knob_x, inset, knob_d, knob_d)
+        painter.setBrush(QColor('#ffffff') if self.isEnabled()
+                         else QColor(255, 255, 255, 160))
+        painter.drawEllipse(knob)
+        if self.hasFocus():
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor(255, 255, 255, 90), 1.0))
+            painter.drawRoundedRect(track.adjusted(0.5, 0.5, -0.5, -0.5),
+                                    radius, radius)
+        painter.end()
+
+
+def apply_switch(switch, dark=True):
+    """Configure/copy the palette for an existing Win11Switch."""
+    switch._dark = bool(dark)
+    switch._accent = _accent(switch._dark)
+    switch.update()
+
+
+def make_switch(parent=None, dark=True, checked=False):
+    return Win11Switch(parent, dark=dark, checked=checked)
 
 
 def apply_card(widget, dark=True):
