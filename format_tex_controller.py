@@ -7,7 +7,9 @@ and talks to the界面 through a tiny view interface, so the same code
 drives the Qt widgets and the AppKit views:
 
     view.selected_entries() -> [(Path, Path | None), ...]
-    view.append(text, tag)               # tag: 'add' | 'del' | 'meta' | None
+    view.append(text, tag, marker=None)  # tag: 'add' | 'del' | 'meta' | None
+                                         # marker: the diff gutter '+', '-'
+                                         # or ' ' (None for headers/text)
     view.clear_output()
     view.set_status(text, encoding=None, selected=None)  # status-bar segments
     view.options() -> FormatOptions
@@ -95,14 +97,16 @@ class FormatController:
                 self.view.append('已符合格式, 无需修改\n\n', None)
                 continue
             for line in e['diff']:
-                tag = None
                 if line.startswith(('+++', '---', '@@')):
-                    tag = 'meta'
-                elif line.startswith('+'):
-                    tag = 'add'
-                elif line.startswith('-'):
-                    tag = 'del'
-                self.view.append(line + '\n', tag)
+                    # file/hunk headers stay ordinary copyable text
+                    self.view.append(line + '\n', 'meta')
+                    continue
+                # the leading ' '/'+'/'-' is a gutter marker: keep it out
+                # of the text so copying the diff never includes it
+                marker = line[:1]
+                tag = ('add' if marker == '+'
+                       else 'del' if marker == '-' else None)
+                self.view.append(line[1:] + '\n', tag, marker=marker)
             self.view.append('\n', None)
             if will_write:
                 out_enc = opts.effective_write_encoding(e.get('read_enc'))

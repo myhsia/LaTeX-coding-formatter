@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
                                QHBoxLayout,
                                QInputDialog, QLabel, QListWidget,
                                QListWidgetItem,
-                               QMainWindow, QMessageBox, QPlainTextEdit,
+                               QMainWindow, QMessageBox,
                                QPushButton, QSplitter, QStyle,
                                QStyledItemDelegate, QStyleOptionComboBox,
                                QStyleOptionViewItem, QVBoxLayout,
@@ -39,7 +39,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
 
 from format_tex import (FormatOptions, backup_path, format_file,
                         format_source, make_backup, scan_directory)
-from diff_view import create_diff_view
+from diff_view import DiffTextEdit, create_diff_view
 from format_tex_controller import FormatController
 from format_tex_theme import DARK, LIGHT
 from filelist_view import create_file_list_view
@@ -946,7 +946,7 @@ class MainWindow(QMainWindow):
         self._option_columns = 0
         layout.addLayout(self.options_grid)
 
-        self.output = QPlainTextEdit()
+        self.output = DiffTextEdit()          # QPlainTextEdit + marker gutter
         self.output.setReadOnly(True)
         self.output.setFont(QFontDatabase.systemFont(
             QFontDatabase.SystemFont.FixedFont))
@@ -1026,8 +1026,7 @@ class MainWindow(QMainWindow):
         # menus last: creating the menu bar triggers window events
         self._build_menus()
         # fixed width so the diff pane fits CODE_COLUMNS monospace cells
-        # (plus the one-cell marker gutter, in the left margin); only the
-        # height can resize
+        # plus the one-cell marker gutter; only the height can resize
         try:
             import math
 
@@ -1040,7 +1039,8 @@ class MainWindow(QMainWindow):
             # so short min/max/close buttons); the standard caption is the
             # one Windows 11's own apps use. Qt clamps the drag via
             # WM_GETMINMAXINFO, and nativeEvent() hides the LR cursors.
-            self.setFixedWidth(math.ceil(232 + 40 + 80 * advance))
+            self.setFixedWidth(
+                math.ceil(232 + 40 + 81 * advance))   # 1 gutter + 80 code
         except Exception:
             pass
 
@@ -2173,8 +2173,8 @@ class MainWindow(QMainWindow):
                 pane = self.diff_view
                 pane.clear()
                 pane.append('plain ', None)
-                pane.append('+added\n', 'add')
-                pane.append('-removed\n', 'del')
+                pane.append('added\n', 'add', marker='+')
+                pane.append('removed\n', 'del', marker='-')
                 pane.append('meta\n', 'meta')
                 storage = pane.view._view.textStorage()
 
@@ -2198,9 +2198,10 @@ class MainWindow(QMainWindow):
 
                 pane_ok = (pane.view.is_read_only()
                            and pane.view.font_is_monospaced()
-                           and pane.text().startswith('plain +added')
-                           and colour_at(8) == self.pal['add'].lower()
-                           and colour_at(16) == self.pal['del'].lower())
+                           and pane.text().startswith('plain added')
+                           and pane.markers() == ['+', '-']
+                           and colour_at(7) == self.pal['add'].lower()
+                           and colour_at(13) == self.pal['del'].lower())
 
                 def pane_fits():
                     slot = self.output
@@ -2217,8 +2218,8 @@ class MainWindow(QMainWindow):
                 fits_ok = fits_ok and pane_fits()
                 pane.clear()
                 lines.append('native diff pane: read-only + monospaced + '
-                             'tag colours + text {}, inside the frame '
-                             '(also after resize) {}: {}'.format(
+                             'tag colours + gutter markers + text {}, inside '
+                             'the frame (also after resize) {}: {}'.format(
                                  pane_ok, fits_ok, pane_ok and fits_ok))
                 ok = ok and pane_ok and fits_ok
 
@@ -2538,8 +2539,11 @@ class MainWindow(QMainWindow):
             self.files_view.select_index(0)
             QApplication.processEvents()
             text = self._output_text()
-            preview_ok = str(sample) in text and '+' in text
-            note('selection -> tagged diff preview: {}'.format(preview_ok))
+            # the +/- markers live in the gutter, not in the copied text
+            preview_ok = (str(sample) in text and '+中文' not in text
+                          and '+' in self.diff_view.markers())
+            note('selection -> tagged diff preview, markers in the gutter: '
+                 '{}'.format(preview_ok))
             ok = ok and preview_ok
 
             note('toggling an option refreshes the preview')
@@ -2922,10 +2926,10 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-    def append(self, text, fmt=None):
+    def append(self, text, fmt=None, marker=None):
         """Append to the diff pane (native NSTextView on macOS, Qt
-        elsewhere)."""
-        self.diff_view.append(text, fmt)
+        elsewhere). ``marker`` is the diff gutter '+', '-' or ' '."""
+        self.diff_view.append(text, fmt, marker=marker)
 
     def clear_output(self):
         self.diff_view.clear()

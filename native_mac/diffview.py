@@ -7,11 +7,15 @@ mechanism as the file list, footer, title and menu). AppKit supplies the
 monospaced text rendering, selection, scrolling and the standard editing
 commands (⌘C/⌘A arrive through the native Edit menu's responder chain).
 
+The ``+``/``-``/space marker of a diff line is not part of the text: it is
+drawn in a thin ``NSRulerView`` gutter on the left, so selecting and
+copying the diff never includes it.
+
 Usage
 -----
     view = NativeDiffView(window, slot, colours)
     view.build()
-    view.clear(); view.append('+ added line\n', 'add')
+    view.clear(); view.append('added line\n', 'add', marker='+')
 """
 
 import sys
@@ -42,6 +46,26 @@ def code_column_width(columns=CODE_COLUMNS):
     return char_advance() * columns
 
 
+_RULER_CLASS = None
+
+
+def _ruler_class():
+    """pyobjc ``NSRulerView`` that draws the diff line markers, i.e. the
+    non-selectable gutter. The owner is attached as a Python attribute."""
+    global _RULER_CLASS
+    if _RULER_CLASS is None:
+        import AppKit
+
+        class _MarkerRuler(AppKit.NSRulerView):
+            def drawHashMarksAndLabelsInRect_(self, rect):
+                owner = getattr(self, 'marker_owner', None)
+                if owner is not None:
+                    owner.draw_ruler(self, rect)
+
+        _RULER_CLASS = _MarkerRuler
+    return _RULER_CLASS
+
+
 def _ns_color(AppKit, value):
     """NSColor from '#rrggbb' (or None)."""
     try:
@@ -66,9 +90,12 @@ class NativeDiffView:
         self.colours = dict(colours or {})
         self._scroll = None
         self._view = None
+        self._ruler = None
         self._font = None
         self._style = None
         self._colours = {}
+        self._markers = {}          # paragraph number -> (marker, colour)
+        self._paragraphs = 0
 
     @staticmethod
     def available():
@@ -86,11 +113,11 @@ class NativeDiffView:
 
             if self._scroll is None:
                 font = diff_font()
-                # hanging indent: the +/-/space marker hangs in the left
-                # gutter, the code column aligns one cell to its right
+                # no hanging indent: the +/-/space marker lives in the
+                # ruler gutter, the text is the code only
                 style = AppKit.NSMutableParagraphStyle.alloc().init()
                 style.setFirstLineHeadIndent_(0.0)
-                style.setHeadIndent_(char_advance())
+                style.setHeadIndent_(0.0)
                 view = AppKit.NSTextView.alloc().initWithFrame_(
                     ((0.0, 0.0), (400.0, 300.0)))
                 view.setRichText_(True)
@@ -118,7 +145,18 @@ class NativeDiffView:
                 scroll.setBorderType_(AppKit.NSNoBorder)
                 scroll.setHasVerticalScroller_(True)
                 scroll.setAutohidesScrollers_(True)
+                # the marker gutter: a thin vertical ruler, not part of the
+                # text, so it can never be selected or copied
+                ruler = _ruler_class().alloc() \
+                    .initWithScrollView_orientation_(
+                        scroll, AppKit.NSVerticalRuler)
+                ruler.marker_owner = self
+                ruler.setRuleThickness_(char_advance())
+                scroll.setVerticalRulerView_(ruler)
+                scroll.setHasVerticalRuler_(True)
+                scroll.setRulersVisible_(True)
                 self._view, self._scroll, self._font = view, scroll, font
+                self._ruler = ruler
                 self._colours = {
                     tag: colour for tag, colour in
                     ((tag, _ns_color(AppKit, value))
@@ -161,8 +199,14 @@ class NativeDiffView:
     def clear(self):
         if self._view is not None:
             self._view.setString_('')
+        self._markers = {}
+        self._paragraphs = 0
+        if self._ruler is not None:
+            self._ruler.setNeedsDisplay_(True)
 
-    def append(self, text, tag=None):
+    def append(self, text, tag=None, marker=None):
+        """Append one line. ``marker`` ('+', '-' or ' ') is drawn in the
+        gutter, not inserted into the text."""
         if self._view is None:
             return
         import AppKit
@@ -176,9 +220,71 @@ class NativeDiffView:
         colour = self._colours.get(tag) if tag else None
         if colour is not None:
             attributes[AppKit.NSForegroundColorAttributeName] = colour
+        if marker is not None:
+            self._markers[self._paragraphs] = (marker, colour)
+        self._paragraphs += text.count('\n')
         piece = Foundation.NSAttributedString.alloc() \
             .initWithString_attributes_(text, attributes)
         self._view.textStorage().appendAttributedString_(piece)
+        if self._ruler is not None:
+            self._ruler.setNeedsDisplay_(True)
+
+    def markers(self):
+        """The gutter markers in paragraph order (for tests)."""
+        return [self._markers[para][0] for para in sorted(self._markers)]
+
+    def draw_ruler(self, ruler, rect):
+        """Paint the marker for each visible diff line in the gutter."""
+        if self._view is None:
+            return
+        try:
+            import AppKit
+            import Foundation
+
+            layout = self._view.layoutManager()
+            storage = self._view.textStorage()
+            if layout is None or storage is None:
+                return
+            text = str(storage.string())
+            inset = self._view.textContainerInset()
+            font = self._font or AppKit.NSFont.monospacedSystemFontOfSize_weight_(
+                DIFF_FONT_SIZE, AppKit.NSFontWeightRegular)
+            attributes = {AppKit.NSFontAttributeName: font}
+            glyph_count = layout.numberOfGlyphs()
+            index = 0
+            last_para = -1
+            while index < glyph_count:
+                result = \
+                    layout.lineFragmentRectForGlyphAtIndex_effectiveRange_(
+                        index, None)
+                line_rect = result[0]
+                effective = result[1] if len(result) > 1 else None
+                char_index = layout.characterIndexForGlyphAtIndex_(index)
+                para = text.count('\n', 0, char_index)
+                if para != last_para:
+                    last_para = para
+                    entry = self._markers.get(para)
+                    if entry is not None:
+                        marker, colour = entry
+                        if colour is None:
+                            colour = AppKit.NSColor.labelColor()
+                        attributes[AppKit.NSForegroundColorAttributeName] = \
+                            colour
+                        point = ruler.convertPoint_fromView_(
+                            (0.0, line_rect.origin.y + inset.height),
+                            self._view)
+                        piece = Foundation.NSAttributedString.alloc() \
+                            .initWithString_attributes_(marker, attributes)
+                        piece.drawAtPoint_((1.0, point.y))
+                length = getattr(effective, 'length', None)
+                if length is None:
+                    try:
+                        length = effective[1]
+                    except Exception:
+                        length = 1
+                index += max(1, int(length))
+        except Exception:
+            pass
 
     def text(self):
         """The pane's plain text (for tests)."""

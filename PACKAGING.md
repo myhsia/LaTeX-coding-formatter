@@ -136,6 +136,8 @@ macOS 上这些区域已是 AppKit 原生视图 (叠加在提供几何位置的 
   原生强调色选择/失焦变暗, ⌘⇧ 多选, Finder 拖放, 原生文件图标/文件名/完整路径提示);
 * **差异面板**: 只读可选的 `NSTextView` (等宽 `monospacedSystemFont`,
   透明背景, 增/删/元信息按调色板上色; ⌘C/⌘A 由原生 Edit 菜单的响应链送达);
+  每行的 `+`/`-`/空格标记画在左侧**窄 `NSRulerView` 边栏**中, 不属于文本,
+  因此复制差异时不会带上标记;
 * **± 按钮**: `NSSegmentedControl` (Small Square + `NSAddTemplate`/
   `NSRemoveTemplate` + momentary, 行高=控件原生高度);
 * **侧栏开关**: `NSSwitch` (含子目录 + 生成备份文件, 4 行分组 179 pt);
@@ -186,6 +188,10 @@ Qt 自带的 `windows11` (滚动条等一并现代化), 否则用自绘样式兜
   (`apply_card`), `+`/`−` 是 Win11 图标按钮 (`apply_icon_button`),
   File/Edit/Window 菜单栏为标题栏同色 + 圆角悬停与深色弹出菜单
   (`apply_menubar`).
+* **差异面板**: Qt 的 `DiffTextEdit` (QPlainTextEdit + 行标记边栏); 每行的
+  `+`/`-`/空格标记画在**左侧 gutter** 中, 不属于可选中文本, 复制差异不会
+  带上标记 (窗口因此加宽一个等宽字符cell). `+++`/`---`/`@@` 头行仍作为普通
+  文本可复制.
 
 **标题栏按钮高度**: 窗口**不**使用 `MSWindowsFixedSizeDialogHint` (该标志让
 Windows 采用较矮的 `WS_DLGFRAME` 对话框标题栏, 使最小化/最大化/关闭按钮比

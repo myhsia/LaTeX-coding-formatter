@@ -494,9 +494,9 @@ class MacApp:
     def selected_entries(self):
         return self.list.selected_entries() if self.list is not None else []
 
-    def append(self, text, tag=None):
+    def append(self, text, tag=None, marker=None):
         if self.diff is not None:
-            self.diff.append(text, tag)
+            self.diff.append(text, tag, marker=marker)
 
     def clear_output(self):
         if self.diff is not None:
@@ -848,9 +848,11 @@ def run_self_test(app):
         _pump(AppKit)
         _pump(AppKit)
         text = app.diff.text()
-        preview_ok = (str(sample) in text and '+' in text)
-        lines.append('folder scan -> list -> preview (tagged diff): {}'
-                     .format(preview_ok))
+        # the +/- markers live in the ruler gutter, not in the copied text
+        preview_ok = (str(sample) in text and '+中文' not in text
+                      and '+' in app.diff.markers())
+        lines.append('folder scan -> list -> preview (markers in the '
+                     'gutter): {}'.format(preview_ok))
         ok = ok and preview_ok
 
         # toggling an option refreshes the preview in place
