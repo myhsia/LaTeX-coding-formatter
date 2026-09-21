@@ -20,7 +20,8 @@ warnings.filterwarnings('ignore', message='.*PyObjCPointer.*')
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from format_tex import FormatOptions, format_file, scan_directory  # noqa: E402
+from format_tex import (FormatOptions, format_file, format_source,  # noqa: E402
+                        scan_directory)
 from format_tex_controller import FormatController  # noqa: E402
 from native_menu import CUSTOM_SENTINEL  # noqa: E402
 from native_mac import menus  # noqa: E402
@@ -863,6 +864,14 @@ def run_self_test(app):
         lines.append('tie option toggle auto-refreshes the preview: {}'
                      .format(tie_ok))
         ok = ok and tie_ok
+
+        # tie mode also normalizes whitespace already in the source
+        tie_src = '中文English 中文'
+        norm_ok = ('中文~English~中文' in format_source(
+            tie_src, FormatOptions(tie=True))[0]
+            and '中文 English 中文' in format_source(tie_src)[0])
+        lines.append('tie normalizes existing whitespace: {}'.format(norm_ok))
+        ok = ok and norm_ok
 
         app.controller.run(True, confirm=False)
         backup = root / 'backup' / 'sub' / 'sample.tex.bak'

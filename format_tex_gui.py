@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
                                QWidget)
 
 from format_tex import (FormatOptions, backup_path, format_file,
-                        make_backup, scan_directory)
+                        format_source, make_backup, scan_directory)
 from diff_view import create_diff_view
 from format_tex_controller import FormatController
 from format_tex_theme import DARK, LIGHT
@@ -2553,6 +2553,14 @@ class MainWindow(QMainWindow):
             note('tie option toggle auto-refreshes the preview: {}'.format(
                 tie_ok))
             ok = ok and tie_ok
+
+            # tie mode also normalizes whitespace already in the source
+            tie_src = '中文English 中文'
+            norm_ok = ('中文~English~中文' in format_source(
+                tie_src, FormatOptions(tie=True))[0]
+                and '中文 English 中文' in format_source(tie_src)[0])
+            note('tie normalizes existing whitespace: {}'.format(norm_ok))
+            ok = ok and norm_ok
 
             note('applying (write)')
             self._run(write=True, confirm=False)

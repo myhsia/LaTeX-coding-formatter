@@ -21,12 +21,15 @@ Rules
   stays attached; '-' is never spaced (E-mail, CPM-Nets, XXXX-XX-XX);
   full-width punctuation (、。) always stays attached.
 
-* Tie mode (``tie=True`` / ``--tie``) replaces *every* space the formatter
-  inserts with a non-breaking tie '~': CJK <-> Latin (生成~pdf~文件),
-  CJK <-> $...$ (如~$\Gamma$~排正体), CJK <-> control words
-  (无需写标题~\cite{1}), the space after \verb, and the half-width
-  punctuation gaps (式~(1)、2)~字体). The '~' before \verb is used either
-  way; spaces already present in the source are left alone.
+* Tie mode (``tie=True`` / ``--tie``) makes *every* separator a
+  non-breaking tie '~': the ones the formatter inserts *and* whitespace
+  already present at those boundaries, collapsed to a single '~'. Applies
+  to CJK <-> Latin (广义~Fibonacci~行列式), CJK <-> $...$ (如~$\Gamma$~排正体),
+  CJK <-> control words (无需写标题~\cite{1}), the space after \verb, and
+  the half-width punctuation gaps (式~(1)、2)~字体). The '~' before \verb
+  is used either way. A control word stays attached to a following
+  math/verb (``\cite $x$`` is left as is, matching the non-tie rules);
+  protected regions keep their internal spaces.
 
 Never modified: verbatim environments, % comments, ``...'' quoted spans.
 
@@ -279,6 +282,46 @@ def apply_spacing(text, punct=True, commands=True, tie=False):
         rules.append(
             (f'({cjk})(\\\\(?!textsuperscript)[A-Za-z]+)',
              r'\1' + sep + r'\2'))
+
+    if tie:
+        # Tie mode is consistent: whitespace already in the source at any
+        # of the boundaries above is collapsed to a single '~' too, not
+        # just the separators we insert. Protected regions (math, \verb,
+        # verbatim, comments, quotes) are placeholders here and untouched.
+
+        def latin_math_space(m):
+            if m.group(1).startswith('\\'):
+                return m.group(0)          # a command stays attached
+            return m.group(1) + '~' + m.group(2)
+
+        def latin_verb_space(m):
+            if m.group(1).startswith('\\'):
+                return m.group(0)
+            return m.group(1) + '~' + m.group(2)
+
+        rules += [
+            (f'({cjk})[ \\t]+({lat})', r'\1~\2'),
+            (f'({lat})[ \\t]+({cjk})', r'\1~\2'),
+            (f'({cjk})[ \\t]+({math_ph})', r'\1~\2'),
+            (f'({math_ph})[ \\t]+({cjk})', r'\1~\2'),
+            (f'({math_ph})[ \\t]+({lat})', r'\1~\2'),
+            (f'({verb_ph})[ \\t]+([{HAN}A-Za-z0-9])', r'\1~\2'),
+            (f'((?:\\\\[A-Za-z]+)|{lat})[ \\t]+({math_ph})',
+             latin_math_space),
+            (f'((?:\\\\[A-Za-z]+)|{lat})[ \\t]+({verb_ph})',
+             latin_verb_space),
+        ]
+        if punct:
+            rules += [
+                (f'({cjk})[ \\t]+\\(', r'\1~('),
+                (f'\\)[ \\t]+({cjk})', r')~\1'),
+                (f'({cjk})([{SENT}])[ \\t]+(?={lat})', r'\1\2~'),
+                (f'({lat})\\.[ \\t]+({cjk})', r'\1.~\2'),
+            ]
+        if commands:
+            rules.append(
+                (f'({cjk})[ \\t]+(\\\\(?!textsuperscript)[A-Za-z]+)',
+                 r'\1~\2'))
 
     total = 0
     for pattern, repl in rules:
