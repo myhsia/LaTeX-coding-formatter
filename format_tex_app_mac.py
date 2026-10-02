@@ -890,6 +890,18 @@ def run_self_test(app):
                      'CJK->command: {}'.format(cw_ok))
         ok = ok and cw_ok
 
+        # \(...\) inline math behaves exactly like $...$
+        paren_ok = (
+            '如 \\(\\Gamma\\) 排正体' in format_source(
+                r'如\(\Gamma\)排正体')[0]
+            and '如~\\(\\Gamma\\)~排正体' in format_source(
+                r'如\(\Gamma\)排正体', FormatOptions(tie=True))[0]
+            and '1820\\(-\\)1830' in format_source(
+                r'1820\(-\)1830')[0])
+        lines.append('inline \\(...\\) math matches $...$: {}'.format(
+            paren_ok))
+        ok = ok and paren_ok
+
         app.controller.run(True, confirm=False)
         backup = root / 'backup' / 'sub' / 'sample.tex.bak'
         applied_ok = ('中文 English 中文' in sample.read_text(encoding='utf-8')

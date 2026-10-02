@@ -2581,6 +2581,17 @@ class MainWindow(QMainWindow):
                  '{}'.format(cw_ok))
             ok = ok and cw_ok
 
+            # \(...\) inline math behaves exactly like $...$
+            paren_ok = (
+                '如 \\(\\Gamma\\) 排正体' in format_source(
+                    r'如\(\Gamma\)排正体')[0]
+                and '如~\\(\\Gamma\\)~排正体' in format_source(
+                    r'如\(\Gamma\)排正体', FormatOptions(tie=True))[0]
+                and '1820\\(-\\)1830' in format_source(
+                    r'1820\(-\)1830')[0])
+            note('inline \\(...\\) math matches $...$: {}'.format(paren_ok))
+            ok = ok and paren_ok
+
             note('applying (write)')
             self._run(write=True, confirm=False)
             QApplication.processEvents()

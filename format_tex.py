@@ -8,6 +8,9 @@ Rules
 * CJK <-> [A-Za-z0-9]        生成pdf文件       -> 生成 pdf 文件
 * CJK/Latin <-> $...$        如$\Gamma$排正体  -> 如 $\Gamma$ 排正体
   Math whose content is only '-', e.g. page ranges 1820$-$1830, stays tight.
+  \(...\) inline math is handled identically: 如\(\Gamma\)排正体 ->
+  如 \(\Gamma\) 排正体, and 1820\(-\)1830 stays tight (display \[...\] is
+  not touched).
 * CJK <-> control words      无需写标题\cite{1} -> 无需写标题 \cite{1}
   \textsuperscript stays attached: 尚书林\textsuperscript{1,\,2}
 * \verb                      对于\verb|..|标题 -> 对于~\verb|..| 标题
@@ -24,7 +27,8 @@ Rules
 * Tie mode (``tie=True`` / ``--tie``) makes every separator a non-breaking
   tie '~': the ones the formatter inserts *and* whitespace already present
   at those boundaries, collapsed to a single '~'. Applies to CJK <-> Latin
-  (广义~Fibonacci~行列式), CJK <-> $...$ (如~$\Gamma$~排正体), CJK ->
+  (广义~Fibonacci~行列式), CJK <-> $...$ / \(...\) (如~$\Gamma$~排正体,
+  如~\(\Gamma\)~排正体), CJK ->
   control word (无需写标题~\cite{1}, and 报}~\hfill after a group close),
   the space after \verb, and the half-width punctuation gaps
   (式~(1)、2)~字体). The '~' before \verb is used either way. A space
@@ -83,6 +87,8 @@ VERBATIM_RE = re.compile(r'\\begin\{(verbatim\*?)\}.*?\\end\{\1\}', re.DOTALL)
 COMMENT_RE = re.compile(r'(?<!\\)%[^\n]*')
 VERB_RE = re.compile(r'\\verb\*?([^a-zA-Z\s*])(.*?)\1')
 MATH_RE = re.compile(r'(?<!\\)\$(?:\\.|[^\\$])*?(?<!\\)\$', re.DOTALL)
+# \(...\) is inline math, treated exactly like $...$
+INLINE_MATH_RE = re.compile(r'\\\(.*?\\\)', re.DOTALL)
 QUOTE_RE = re.compile(r"``.*?''", re.DOTALL)
 DOLLAR_RE = re.compile(r'(?<!\\)\$')
 PLACEHOLDER_RE = re.compile('\x00([SVMT])(\\d+)\x01')
@@ -226,6 +232,15 @@ def protect(text, tight_ranges=True):
     text = take('S', VERBATIM_RE, text)
     text = take('S', COMMENT_RE, text)
     text = take('V', VERB_RE, text)
+
+    # \(...\) inline math, handled exactly like $...$ (protect it before
+    # the $ count so a stray $ inside it cannot trip the odd-$ check)
+    def take_paren_math(m):
+        cls = 'T' if (tight_ranges and m.group(0)[2:-2].strip() == '-') \
+            else 'M'
+        return prot.add(cls, m.group(0))
+
+    text = INLINE_MATH_RE.sub(take_paren_math, text)
 
     dollars = len(DOLLAR_RE.findall(text))
     if dollars % 2:
