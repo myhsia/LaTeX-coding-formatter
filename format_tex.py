@@ -18,23 +18,27 @@ Rules
   spaces are normalized to '~'), a plain space after \verb. \verb|...|
   contents and \verb|..|\linebreak\verb|..| constructs are never modified.
 * Half-width punctuation     式(1)、(2)是 -> 式 (1)、(2) 是
-  2)字体 -> 2) 字体, 的.fig格式 -> 的 .fig 格式, 1.中国科学院 -> 1. 中国科学院
+  2)字体 -> 2) 字体, 研究及開發,2024 -> 研究及開發, 2024,
+  的.fig格式 -> 的 .fig 格式, 1.中国科学院 -> 1. 中国科学院
   Sentence punctuation directly after CJK and followed by whitespace, CJK
   or end of line stays attached (使用说明.); Chinese-style ',;' before CJK
   stays attached; '-' is never spaced (E-mail, CPM-Nets, XXXX-XX-XX);
-  full-width punctuation (、。) always stays attached.
+  full-width punctuation (、。) always stays attached. The '.' attaches to
+  the following Latin token (的 .fig); ',;:!?' attach to the preceding CJK
+  and take the space after them (研究及開發, 2024).
 
-* Tie mode (``tie=True`` / ``--tie``) makes every separator a non-breaking
-  tie '~': the ones the formatter inserts *and* whitespace already present
-  at those boundaries, collapsed to a single '~'. Applies to CJK <-> Latin
-  (广义~Fibonacci~行列式), CJK <-> $...$ / \(...\) (如~$\Gamma$~排正体,
-  如~\(\Gamma\)~排正体), CJK ->
-  control word (无需写标题~\cite{1}, and 报}~\hfill after a group close),
-  the space after \verb, and the half-width punctuation gaps
-  (式~(1)、2)~字体). The '~' before \verb is used either way. A space
-  *after* a control word is left alone (\hfill  应 and \songti  期 keep
-  their spacing), as is control-word <-> control-word (\TT \hfill); a
-  control word also stays attached to a following math/verb (``\cite $x$``
+* Tie mode (``tie=True`` / ``--tie``) uses a non-breaking tie '~' only on
+  the *left* of a foreign token that follows CJK: CJK -> Latin/digits
+  (生成~pdf 文件), CJK -> $...$ / \(...\) (如~$\Gamma$ 排正体), CJK ->
+  control word (无需写标题~\cite{1}, and 报}~\hfill after a group close)
+  and CJK -> \verb (对于~\verb|..| 标题). The right side of a foreign token
+  and the gap between two foreign tokens stay plain spaces, so a line may
+  still break there; punctuation gaps are always plain spaces
+  (研究及開發, 2024, 式 (1) 是). Existing whitespace at those boundaries is
+  normalized the same way. A space *after* a control word is left alone
+  (\hfill  应 and \songti  期 keep their spacing), as is control-word <->
+  control-word (\TT \hfill); a control word also stays attached to a
+  following math/verb (``\cite $x$``
   is left as is). Protected regions keep their internal spaces.
 
 Never modified: verbatim environments, % comments, ``...'' quoted spans.
@@ -81,6 +85,10 @@ except ImportError:
 
 HAN = '\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff'
 SENT = '.,;:!?'
+# sentence punctuation that attaches to the preceding CJK; the space then
+# goes *after* it (研究及開發, 2024). '.' is special: it keeps the following
+# Latin token whole (的 .fig).
+SENT_AFTER = ',;:!?'
 PH = '\x00{}{}\x01'
 
 VERBATIM_RE = re.compile(r'\\begin\{(verbatim\*?)\}.*?\\end\{\1\}', re.DOTALL)
@@ -278,48 +286,54 @@ def apply_spacing(text, punct=True, commands=True, tie=False):
     lat = '[A-Za-z0-9]'
     math_ph = '\x00M\\d+\x01'
     verb_ph = '\x00V\\d+\x01'
-    # every space this function inserts uses ``sep``: '~' (a tie) when the
-    # tie option is on, a plain space otherwise
-    sep = '~' if tie else ' '
+    # '~' only on the LEFT of a foreign token (Latin/digits, inline math,
+    # control word) that follows CJK; a plain space on its right and
+    # between foreign tokens. Plain mode uses a space everywhere.
+    left = '~' if tie else ' '
+    sp = ' '
 
     def latin_math(m):
         if m.group(1).startswith('\\'):
             return m.group(0)
-        return m.group(1) + sep + m.group(2)
+        return m.group(1) + sp + m.group(2)
 
     def latin_verb(m):
         if m.group(1).startswith('\\'):
             return m.group(0)
-        return m.group(1) + sep + m.group(2)
+        return m.group(1) + sp + m.group(2)
 
     def latin_cjk(m):
         if tie and _in_control_word(m.string, m.start(1)):
             return m.group(0)          # trailing letters of a control word
-        return m.group(1) + sep + m.group(2)
+        return m.group(1) + sp + m.group(2)
 
     rules = [
-        (f'({cjk})({lat})', r'\1' + sep + r'\2'),
-        (f'({lat})({cjk})', latin_cjk),
+        (f'({cjk})({lat})', r'\1' + left + r'\2'),   # CJK -> Latin
+        (f'({lat})({cjk})', latin_cjk),              # Latin -> CJK
     ]
     if punct:
         rules += [
-            (f'({cjk})\\(', r'\1' + sep + r'('),
-            (f'\\)({cjk})', r')' + sep + r'\1'),
-            (f'({cjk})([{SENT}])(?={lat})', r'\1' + sep + r'\2'),
-            (f'({lat})\\.({cjk})', r'\1.' + sep + r'\2'),
+            (f'({cjk})\\(', r'\1 ('),
+            (f'\\)({cjk})', r') \1'),
+            # '.' keeps the following Latin token whole (的.fig -> 的 .fig);
+            # the other sentence punctuation attaches to the preceding CJK
+            # and the space goes after it (研究及開發,2024 -> 研究及開發, 2024)
+            (f'({cjk})\\.(?={lat})', r'\1 .'),
+            (f'({cjk})([{SENT_AFTER}])(?={lat})', r'\1\2 '),
+            (f'({lat})\\.({cjk})', r'\1. \2'),
         ]
     rules += [
-        (f'({cjk})({math_ph})', r'\1' + sep + r'\2'),
-        (f'({math_ph})({cjk})', r'\1' + sep + r'\2'),
-        (f'({math_ph})({lat})', r'\1' + sep + r'\2'),
+        (f'({cjk})({math_ph})', r'\1' + left + r'\2'),   # CJK -> math
+        (f'({math_ph})({cjk})', r'\1 \2'),               # math -> CJK
+        (f'({math_ph})({lat})', r'\1 \2'),               # math -> Latin
         (f'({cjk})({verb_ph})', r'\1~\2'),
         (f'({cjk})[ \\t]+({verb_ph})', r'\1~\2'),
-        (f'({verb_ph})([{HAN}A-Za-z0-9])', r'\1' + sep + r'\2'),
+        (f'({verb_ph})([{HAN}A-Za-z0-9])', r'\1 \2'),    # after \verb
     ]
     if commands:
         rules.append(
             (f'({cjk})(\\\\(?!textsuperscript)[A-Za-z]+)',
-             r'\1' + sep + r'\2'))
+             r'\1' + left + r'\2'))                      # CJK -> control word
 
     if tie:
         # Tie mode is consistent: whitespace already in the source at any
@@ -330,32 +344,32 @@ def apply_spacing(text, punct=True, commands=True, tie=False):
         def latin_math_space(m):
             if m.group(1).startswith('\\'):
                 return m.group(0)          # a command stays attached
-            return m.group(1) + '~' + m.group(2)
+            return m.group(1) + sp + m.group(2)
 
         def latin_verb_space(m):
             if m.group(1).startswith('\\'):
                 return m.group(0)
-            return m.group(1) + '~' + m.group(2)
+            return m.group(1) + sp + m.group(2)
 
         def latin_cjk_space(m):
             # a space *after* a control word (before CJK) is not ours to
             # touch: \hfill  应 / \songti  期 keep their spacing
             if _in_control_word(m.string, m.start(1)):
                 return m.group(0)
-            return m.group(1) + '~' + m.group(2)
+            return m.group(1) + sp + m.group(2)
 
         def punct_dot_cjk(m):
             if _in_control_word(m.string, m.start(1)):
                 return m.group(0)
-            return m.group(1) + '.~' + m.group(2)
+            return m.group(1) + '. ' + m.group(2)
 
         rules += [
             (f'([A-Za-z0-9]+)[ \\t]+({cjk})', latin_cjk_space),
             (f'({cjk})[ \\t]+([A-Za-z0-9]+)', r'\1~\2'),
             (f'({cjk})[ \\t]+({math_ph})', r'\1~\2'),
-            (f'({math_ph})[ \\t]+({cjk})', r'\1~\2'),
-            (f'({math_ph})[ \\t]+([A-Za-z0-9]+)', r'\1~\2'),
-            (f'({verb_ph})[ \\t]+([{HAN}A-Za-z0-9])', r'\1~\2'),
+            (f'({math_ph})[ \\t]+({cjk})', r'\1 \2'),
+            (f'({math_ph})[ \\t]+([A-Za-z0-9]+)', r'\1 \2'),
+            (f'({verb_ph})[ \\t]+([{HAN}A-Za-z0-9])', r'\1 \2'),
             (f'((?:\\\\[A-Za-z]+)|[A-Za-z0-9]+)[ \\t]+({math_ph})',
              latin_math_space),
             (f'((?:\\\\[A-Za-z]+)|[A-Za-z0-9]+)[ \\t]+({verb_ph})',
@@ -363,9 +377,9 @@ def apply_spacing(text, punct=True, commands=True, tie=False):
         ]
         if punct:
             rules += [
-                (f'({cjk})[ \\t]+\\(', r'\1~('),
-                (f'\\)[ \\t]+({cjk})', r')~\1'),
-                (f'({cjk})([{SENT}])[ \\t]+(?={lat})', r'\1\2~'),
+                (f'({cjk})[ \\t]+\\(', r'\1 ('),
+                (f'\\)[ \\t]+({cjk})', r') \1'),
+                (f'({cjk})([{SENT}])[ \\t]+(?={lat})', r'\1\2 '),
                 (f'([A-Za-z0-9]+)\\.[ \\t]+({cjk})', punct_dot_cjk),
             ]
         if commands:

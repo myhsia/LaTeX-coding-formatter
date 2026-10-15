@@ -859,20 +859,23 @@ def run_self_test(app):
         tie = app.option_controls['tie']
         tie.view.performClick_(None)
         _pump(AppKit)
-        tie_ok = '中文~English~中文' in app.diff.text()
+        tie_ok = '中文~English 中文' in app.diff.text()
         tie.view.performClick_(None)
         _pump(AppKit)
-        tie_ok = tie_ok and '中文~English~中文' not in app.diff.text()
+        tie_ok = tie_ok and '中文~English 中文' not in app.diff.text()
         lines.append('tie option toggle auto-refreshes the preview: {}'
                      .format(tie_ok))
         ok = ok and tie_ok
 
         # tie mode also normalizes whitespace already in the source
         tie_src = '中文English 中文'
-        norm_ok = ('中文~English~中文' in format_source(
+        norm_ok = ('中文~English 中文' in format_source(
             tie_src, FormatOptions(tie=True))[0]
-            and '中文 English 中文' in format_source(tie_src)[0])
-        lines.append('tie normalizes existing whitespace: {}'.format(norm_ok))
+            and '中文 English 中文' in format_source(tie_src)[0]
+            and '研究及開發, 2024' in format_source('研究及開發,2024')[0]
+            and '的 .fig 格式' in format_source('的.fig格式')[0])
+        lines.append('tie normalizes existing whitespace / punctuation '
+                     'spacing: {}'.format(norm_ok))
         ok = ok and norm_ok
 
         # spaces after a control word stay; CJK -> command ties (incl. a
@@ -894,7 +897,7 @@ def run_self_test(app):
         paren_ok = (
             '如 \\(\\Gamma\\) 排正体' in format_source(
                 r'如\(\Gamma\)排正体')[0]
-            and '如~\\(\\Gamma\\)~排正体' in format_source(
+            and '如~\\(\\Gamma\\) 排正体' in format_source(
                 r'如\(\Gamma\)排正体', FormatOptions(tie=True))[0]
             and '1820\\(-\\)1830' in format_source(
                 r'1820\(-\)1830')[0])

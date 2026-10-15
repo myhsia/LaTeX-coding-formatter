@@ -172,7 +172,7 @@ jobs:
             > tie2.tex
           ./dist/format-tex-${{ matrix.suffix }}${{ matrix.ext }} \
             --tie --no-backup tie2.tex
-          grep -qF $'\xe4\xb8\xad\xe6\x96\x87~English~\xe4\xb8\xad\xe6\x96\x87' \
+          grep -qF $'\xe4\xb8\xad\xe6\x96\x87~English \xe4\xb8\xad\xe6\x96\x87' \
             tie2.tex
           # a space after a control word is preserved (not turned into '~')
           printf '\\hfill \xe4\xb8\xad\xe6\x96\x87\n' > tie3.tex
