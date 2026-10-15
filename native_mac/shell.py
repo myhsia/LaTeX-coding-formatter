@@ -33,6 +33,8 @@ SIDEBAR_MIN = 232.0
 WINDOW_MIN = (760.0, 560.0)
 # macOS default window content margin (20 pt)
 WINDOW_MARGIN = 20.0
+# gap between the sidebar group's section header and the card below it
+GROUP_HEADER_GAP = 4.0
 
 
 class NativeShell:
@@ -51,6 +53,7 @@ class NativeShell:
         self.footer_separator = None
         self.footer_host = None
         self.sidebar_group = None
+        self.sidebar_group_header = None
         self.title_label = None
         self._delegate = None
         self._zoom_target = None
@@ -219,19 +222,28 @@ class NativeShell:
         self.band.setFrame_(((0.0, height - band_height),
                              (panel_width, band_height)))
 
-        # sidebar contents: group at the top (below the band), then the
-        # file list, then the footer row
+        # sidebar contents: section header + group at the top (below the
+        # band), then the file list, then the footer row
         margin = WINDOW_MARGIN
         top = height - BAND_HEIGHT - margin
         group_height = 179.0       # 4 x 44 pt grid rows + 3 hairlines
+        header_block = 0.0
+        if self.sidebar_group_header is not None:
+            header_h = self.sidebar_group_header.frame().size.height
+            self.sidebar_group_header.setFrame_(
+                ((margin, top - header_h),
+                 (max(1.0, sidebar_width - 2 * margin), header_h)))
+            self.sidebar_group_header.setHidden_(False)
+            header_block = header_h + GROUP_HEADER_GAP
         if self.sidebar_group is not None:
             self.sidebar_group.setFrame_(
-                ((margin, top - group_height),
+                ((margin, top - header_block - group_height),
                  (max(1.0, sidebar_width - 2 * margin), group_height)))
         self.sidebar_host.setFrame_(
             ((margin, FOOTER_HEIGHT),
              (max(1.0, sidebar_width - 2 * margin),
-              max(1.0, top - group_height - margin - FOOTER_HEIGHT))))
+              max(1.0, top - header_block - group_height - margin
+                  - FOOTER_HEIGHT))))
         self.footer_host.setFrame_(((0.0, 0.0),
                                     (sidebar_width, FOOTER_HEIGHT)))
 
@@ -287,6 +299,25 @@ class NativeShell:
         self.title_label.setHidden_(False)
 
     # ---------- helpers ----------
+    def make_group_header(self, text):
+        """The native section header above the sidebar group (System
+        Settings style: 13 pt semibold, secondary label colour)."""
+        import AppKit
+
+        field = AppKit.NSTextField.alloc().init()
+        field.setBezeled_(False)
+        field.setDrawsBackground_(False)
+        field.setEditable_(False)
+        field.setSelectable_(False)
+        field.setStringValue_(text)
+        field.setFont_(AppKit.NSFont.systemFontOfSize_weight_(
+            13.0, AppKit.NSFontWeightSemibold))
+        field.setTextColor_(AppKit.NSColor.secondaryLabelColor())
+        field.sizeToFit()
+        self.sidebar_host.superview().addSubview_(field)
+        self.sidebar_group_header = field
+        return field
+
     def make_group_box(self):
         """The sidebar's grouped settings box (rounded translucent)."""
         import AppKit

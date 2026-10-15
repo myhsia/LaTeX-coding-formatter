@@ -103,6 +103,8 @@ class MacApp:
 
     def _build_sidebar(self, AppKit):
         shell = self.shell
+        # native section header above the group (System Settings style)
+        self.group_title = shell.make_group_header('常规')
         group = shell.make_group_box()
 
         def label(text):
@@ -957,6 +959,22 @@ def run_self_test(app):
         lines.append('settings-style group rows (44 pt + hairline, group '
                      '179 pt): {}'.format(rows_ok))
         ok = ok and rows_ok
+
+        # ... with a native "常规" section header above the card
+        header = app.shell.sidebar_group_header
+        header_ok = False
+        if header is not None:
+            hf = header.frame()
+            gf = app.shell.sidebar_group.frame()
+            gap = hf.origin.y - (gf.origin.y + gf.size.height)
+            header_ok = (str(header.stringValue()) == '常规'
+                         and header.font().pointSize() == 13.0
+                         and not header.isSelectable()
+                         and abs(gap - 4.0) < 1.0
+                         and abs(hf.origin.x - gf.origin.x) < 1.0)
+        lines.append('sidebar group title "常规" (13 pt, above the card): '
+                     '{}'.format(header_ok))
+        ok = ok and header_ok
 
         # the sidebar is a fixed 232 pt with no divider to drag (a plain
         # container instead of a split view)

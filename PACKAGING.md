@@ -141,6 +141,8 @@ macOS 上这些区域已是 AppKit 原生视图 (叠加在提供几何位置的 
 * **± 按钮**: `NSSegmentedControl` (Small Square + `NSAddTemplate`/
   `NSRemoveTemplate` + momentary, 行高=控件原生高度);
 * **侧栏开关**: `NSSwitch` (含子目录 + 生成备份文件, 4 行分组 179 pt);
+  分组框上方为原生分组标题 "常规" (13 pt semibold, 次级文字色, 左对齐于分组框
+  左缘, 与分组框间距 4 pt);
   **两个下拉**: 原生 `NSPopUpButton` (含 其它… 自定义项, 复用 Qt 输入对话框
   后回填); **应用按钮**: 原生 `NSButton`; **状态栏**: 原生 `NSTextField`;
   **选项复选框**: 原生 `NSButton` (`NSSwitchButton`, 6 个, 覆盖在仅占位的
