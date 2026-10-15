@@ -93,6 +93,15 @@ def _selftest_note(text):
         pass
 
 
+def _log_line(window, text):
+    """Append a diagnostic line to the app log (best effort)."""
+    try:
+        with open(window.log_path(), 'a', encoding='utf-8') as fh:
+            fh.write(text + '\n')
+    except Exception:
+        pass
+
+
 def detect_dark(app):
     try:
         return app.styleHints().colorScheme() == Qt.ColorScheme.Dark
@@ -3098,18 +3107,33 @@ class MainWindow(QMainWindow):
             recursive = self.recursive_enabled()
             collected = []
             seen = set()
+            dirs = files = other = 0
             for p in paths:
                 path = Path(p)
                 if path.is_dir():
+                    dirs += 1
                     for m in scan_directory(path, ext, recursive):
                         if str(m) not in seen:
                             seen.add(str(m))
                             collected.append((str(m), str(path)))
                 elif path.is_file():
+                    files += 1
                     if str(path) not in seen:
                         seen.add(str(path))
                         collected.append((str(path), str(path.parent)))
-            self._add_paths(collected)
+                else:
+                    other += 1
+            added = self._add_paths(collected)
+            # a dropped folder is scanned with the current settings, so a
+            # folder with no matching files adds nothing: say so and why
+            summary = ('拖入/选择 {} 项 (目录 {} 文件 {} 其它 {}): 扩展名 {} · '
+                       '含子目录 {} · 匹配 {} · 新增 {}'.format(
+                           len(paths), dirs, files, other, ext,
+                           '开' if recursive else '关', len(collected),
+                           added))
+            self.set_status(summary)
+            _log_line(self, summary)
+            return added
         except Exception:
             self.show_error(traceback.format_exc())
 

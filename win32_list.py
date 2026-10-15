@@ -225,6 +225,8 @@ class Win32FileList:
         self._host = None
         self._old_proc = None
         self._proc_ref = None
+        self._child_proc_ref = None
+        self._old_child_proc = None
         self._icon_list = None
         self._icons = {}                # (is_dir, suffix) -> image index
         self._font = None
@@ -346,7 +348,13 @@ class Win32FileList:
                                       _as_ptr(column))
 
             self._apply_colours()
+            # WM_DROPFILES is posted to the window registered here, and its
+            # handler must be the same HWND we subclass, so register both
+            # the list child (drops over the rows) and the host (drops in
+            # the margins) and subclass each.
             self._shell32.DragAcceptFiles(hwnd, True)
+            self._shell32.DragAcceptFiles(host, True)
+            self._subclass_child()
             self._subclass_host()
             # the control must fill the widget before it is shown
             self.place()
@@ -569,6 +577,15 @@ class Win32FileList:
             self._host, GWLP_WNDPROC,
             ctypes.cast(self._proc_ref, ctypes.c_void_p))
 
+    def _subclass_child(self):
+        """Handle WM_DROPFILES on the list itself: the drop goes to the
+        window registered with DragAcceptFiles (the child), not to the
+        parent whose proc observes WM_NOTIFY."""
+        self._child_proc_ref = WNDPROC(self._child_proc)
+        self._old_child_proc = self._setter(
+            self._hwnd, GWLP_WNDPROC,
+            ctypes.cast(self._child_proc_ref, ctypes.c_void_p))
+
     def _host_proc(self, hwnd, msg, wparam, lparam):
         try:
             if msg == WM_NOTIFY and self._hwnd is not None:
@@ -584,16 +601,31 @@ class Win32FileList:
                     finally:
                         self._in_notify = False
             elif msg == WM_DROPFILES and callable(self.on_drop):
-                paths = self._dropped_paths(wparam)
-                self._user32.DragFinish(wparam)
-                if paths:
-                    self.on_drop(paths)
+                self._handle_drop(wparam)
             elif msg == WM_NCDESTROY:
                 self._restore_host()
         except Exception:
             pass
         return self._user32.CallWindowProcW(self._old_proc, hwnd, msg,
                                             WPARAM(wparam), LPARAM(lparam))
+
+    def _child_proc(self, hwnd, msg, wparam, lparam):
+        try:
+            if msg == WM_DROPFILES and callable(self.on_drop):
+                self._handle_drop(wparam)
+                return 0
+            if msg == WM_NCDESTROY:
+                self._restore_child()
+        except Exception:
+            pass
+        return self._user32.CallWindowProcW(self._old_child_proc, hwnd, msg,
+                                            WPARAM(wparam), LPARAM(lparam))
+
+    def _handle_drop(self, hdrop):
+        paths = self._dropped_paths(hdrop)
+        self._user32.DragFinish(hdrop)
+        if paths:
+            self.on_drop(paths)
 
     def _dropped_paths(self, hdrop):
         paths = []
@@ -614,6 +646,14 @@ class Win32FileList:
         try:
             if self._old_proc:
                 self._setter(self._host, GWLP_WNDPROC, self._old_proc)
+        except Exception:
+            pass
+
+    def _restore_child(self):
+        try:
+            if self._old_child_proc:
+                self._setter(self._hwnd, GWLP_WNDPROC,
+                             self._old_child_proc)
         except Exception:
             pass
 

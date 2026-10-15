@@ -638,9 +638,11 @@ class MacApp:
 
     def add_paths(self, paths):
         entries = []
+        dirs = files = other = 0
         for raw in paths:
             path = Path(raw)
             if path.is_dir():
+                dirs += 1
                 try:
                     matches = scan_directory(path, self.extension(),
                                              self.recursive())
@@ -649,12 +651,25 @@ class MacApp:
                 for match in matches:
                     entries.append((str(match), str(path)))
             elif path.is_file():
+                files += 1
                 entries.append((str(path), str(path.parent)))
+            else:
+                other += 1
         added = self.list.add(entries)
         if added and not self.list.has_selection():
             self.list.select_index(0)
         self.update_hint()
         self.update_remove_enabled()
+        # a dropped folder is scanned with the current settings, so a
+        # folder with no matching files adds nothing: say so and why
+        try:
+            self.set_status(
+                '拖入/选择 {} 项 (目录 {} 文件 {} 其它 {}): 扩展名 {} · '
+                '含子目录 {} · 匹配 {} · 新增 {}'.format(
+                    len(paths), dirs, files, other, self.extension(),
+                    '开' if self.recursive() else '关', len(entries), added))
+        except Exception:
+            pass
         return added
 
     def choose_files(self):
