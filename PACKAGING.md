@@ -104,8 +104,8 @@ PyInstaller 不支持跨平台编译, Windows/Linux 版本通过 CI 在对应系
   由一段 VBScript 自定义动作 (`packaging/windows/confirm-upgrade.vbs`) 通过
   `MsgBox` 实现, 仅在检测到旧版本 (`WIX_UPGRADE_DETECTED`) 且为**交互式安装**
   (`UILevel != 2`) 时运行, 静默安装 (`/qn`) 不会弹出. CI 会校验
-  `Upgrade`/`InstallExecuteSequence`/`CustomAction` 表并实际静默安装两个连续版本,
-  断言只剩一个安装记录.
+  `Upgrade`/`InstallExecuteSequence`/`CustomAction` 表, 并实际静默安装两个连续版本,
+  再用 Windows Installer COM 断言装完新版本后**旧 ProductCode 已卸载**.
   (VBScript 已被 Windows 列为弃用组件, 构建时 WiX 会给出 `WIX1163` 提示;
   若将来系统不再自带, 可改为 MSI UI (`WixToolset.UI.wixext`) 的对话框.)
 
