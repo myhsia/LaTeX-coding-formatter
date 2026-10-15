@@ -460,13 +460,17 @@ jobs:
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
           $payload = (Resolve-Path 'payloads/msi-payload-windows-x86_64').Path
           $confirm = (Resolve-Path packaging/windows/confirm-upgrade.vbs).Path
+          $msis = @{}
           foreach ($v in @('1.0.1', '1.0.2')) {
+            $out = Join-Path $dir "upgrade-$v.msi"
             & wix build packaging/windows/format-tex.wxs -arch x64 `
               -acceptEula wix7 `
               -d PayloadDir="$payload" -d Version="$v" -d ConfirmVbs="$confirm" `
-              -o "$dir/upgrade-$v.msi" 2>&1 |
+              -o "$out" 2>&1 |
               ForEach-Object { Write-Host "   wix: $_" }
             if ($LASTEXITCODE -ne 0) { throw "wix build failed for $v" }
+            if (-not (Test-Path $out)) { throw "missing $out" }
+            $msis[$v] = (Resolve-Path $out).Path
           }
 
           function Get-InstallCount {
@@ -477,9 +481,11 @@ jobs:
           }
           function Install-Msi($path) {
             $p = Start-Process msiexec -Wait -PassThru -ArgumentList @(
-              '/i', "`"$path`"", '/qn', '/norestart')
+              '/i', "`"$path`"", '/qn', '/norestart', '/l*v', "`"$path.log`"")
             # 0 = ok, 3010 = success (reboot recommended)
             if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
+              Get-Content "$path.log" -Tail 40 -ErrorAction SilentlyContinue |
+                Write-Host
               throw "msiexec /i $path failed (exit $($p.ExitCode))"
             }
           }
@@ -487,17 +493,17 @@ jobs:
           $before = Get-InstallCount
           if ($before -ne 0) { throw "unexpected pre-existing install ($before)" }
 
-          Install-Msi "$dir/upgrade-1.0.1.msi"
+          Install-Msi $msis['1.0.1']
           $one = Get-InstallCount
           Write-Host "after 1.0.1: $one installed"
 
-          Install-Msi "$dir/upgrade-1.0.2.msi"
+          Install-Msi $msis['1.0.2']
           $two = Get-InstallCount
           Write-Host "after 1.0.2: $two installed"
 
           # best-effort cleanup so the runner is left clean
           Start-Process msiexec -Wait -PassThru -ArgumentList @(
-            '/x', "`"$dir/upgrade-1.0.2.msi`"", '/qn', '/norestart') | Out-Null
+            '/x', "`"$($msis['1.0.2'])`"", '/qn', '/norestart') | Out-Null
 
           if ($one -ne 1) { throw "expected 1 install after 1.0.1, got $one" }
           if ($two -ne 1) { throw "upgrade left $two products (expected 1)" }
