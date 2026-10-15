@@ -93,7 +93,19 @@ PyInstaller 不支持跨平台编译, Windows/Linux 版本通过 CI 在对应系
   Maintenance Fee) EULA, CI 中通过 `-acceptEula wix7` 显式接受 (该接受标记
   与主版本号绑定); OSMF 对**有营收**的使用者另有付费义务.
   CI 将 WiX 固定为 `7.0.0`: 升级到 v8 时需同时把标记改为 `wix8`.
-* 版本号取自推送的 `v*` 标签 (例如 `v1.0` → `1.0.0`), 手动触发时默认 `1.0.0`.
+* 版本号的 `major.minor` 取自 `v*` 标签 (例如 `v1.2`), 否则为 `1.0`; 第三段
+  (build) 使用 **单调递增的 CI 运行号** (`1.2.<run_number>`). 因此每次构建的
+  `ProductVersion` 都严格大于上一次, WiX 的 `<MajorUpgrade>` 会把**已安装的旧版本
+  自动卸载后再装新版本** —— 无需先去"控制面板"手动卸载. (`UpgradeCode` 保持不变,
+  WiX 每次构建重新生成 `ProductCode`; Windows Installer 版本字段限制:
+  major/minor ≤ 255, build ≤ 65535, 故运行号放在第三段.)
+* 覆盖已安装版本时, MSI 会先弹出**原生 Windows 确认框** ("A previous version …
+  overwrite the current version?") 供确认 (确定=继续升级, 取消=中止):
+  由一段 VBScript 自定义动作 (`packaging/windows/confirm-upgrade.vbs`) 通过
+  `MsgBox` 实现, 仅在检测到旧版本 (`WIX_UPGRADE_DETECTED`) 且为**交互式安装**
+  (`UILevel != 2`) 时运行, 静默安装 (`/qn`) 不会弹出. CI 会校验
+  `Upgrade`/`InstallExecuteSequence`/`CustomAction` 表并实际静默安装两个连续版本,
+  断言只剩一个安装记录.
 
 ### macOS 安装镜像 (DMG)
 

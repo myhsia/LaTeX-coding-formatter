@@ -4,7 +4,8 @@
 
   Built with WiX v4+ (`wix build`), e.g.:
     wix build packaging/windows/format-tex.wxs -arch x64 \
-        -d PayloadDir="<abs path>" -d Version="1.0.0" -o out.msi
+        -d PayloadDir="<abs path>" -d Version="1.0.0" \
+        -d ConfirmVbs="<abs path>\confirm-upgrade.vbs" -o out.msi
 
   The payload directory must contain the GUI onedir bundle contents
   (format-tex-gui.exe + _internal/...) plus the CLI exe
@@ -19,7 +20,32 @@
            Scope="perUser"
            Compressed="yes">
 
-    <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
+    <!-- A newer version replaces the installed one: RemoveExistingProducts
+         uninstalls the old build before the new files are laid down, so no
+         manual uninstall is ever needed. Keep UpgradeCode stable and let
+         WiX regenerate ProductCode every build (a real major upgrade). -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version is already installed."
+                  Schedule="afterInstallValidate" />
+
+    <!-- Native Windows confirmation before the old build is removed. Shown
+         only when an upgrade is detected and the install is interactive
+         (UILevel=2 is /qn), so silent installs never block. -->
+    <CustomAction Id="AskCoverVersion" Script="vbscript"
+                  ScriptSourceFile="$(var.ConfirmVbs)"
+                  VBScriptCall="ConfirmCoverVersion"
+                  Execute="immediate" Return="check" />
+    <CustomAction Id="CoverVersionAbort"
+                  Error="Upgrade cancelled by the user." />
+
+    <InstallExecuteSequence>
+      <Custom Action="AskCoverVersion" Before="InstallValidate">
+        WIX_UPGRADE_DETECTED AND NOT UILevel=2
+      </Custom>
+      <Custom Action="CoverVersionAbort" After="AskCoverVersion">
+        COVER_VERSION_CANCEL
+      </Custom>
+    </InstallExecuteSequence>
+
     <MediaTemplate EmbedCab="yes" />
 
     <StandardDirectory Id="LocalAppDataFolder">

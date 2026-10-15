@@ -322,12 +322,19 @@ jobs:
         id: ver
         shell: bash
         run: |
+          # Windows Installer compares ProductVersion to decide whether a
+          # package is an upgrade: major/minor <= 255, build <= 65535. Use
+          # the monotonic run number as the build field so *every* build is
+          # strictly newer than the last and <MajorUpgrade> can remove the
+          # previously installed product automatically.
           ref='${{ github.ref_name }}'
-          if [[ "$ref" =~ ^v([0-9]+\.[0-9]+)(\.[0-9]+)?$ ]]; then
-            v="${BASH_REMATCH[1]}${BASH_REMATCH[2]:-.0}"
+          run='${{ github.run_number }}'
+          if [[ "$ref" =~ ^v([0-9]+)\.([0-9]+) ]]; then
+            major="${BASH_REMATCH[1]}"; minor="${BASH_REMATCH[2]}"
           else
-            v="1.0.0"
+            major=1; minor=0
           fi
+          v="${major}.${minor}.$(( run % 65536 ))"
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "MSI version: $v"
       - name: Download Windows payloads
@@ -340,6 +347,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path dist-msi | Out-Null
+          $confirm = (Resolve-Path packaging/windows/confirm-upgrade.vbs).Path
           foreach ($a in @(@{suffix='windows-x86_64'; arch='x64'},
                            @{suffix='windows-arm64';  arch='arm64'})) {
             $payload = (Resolve-Path "payloads/msi-payload-$($a.suffix)").Path
@@ -349,6 +357,7 @@ jobs:
               -acceptEula wix7 `
               -d PayloadDir="$payload" `
               -d Version="${{ steps.ver.outputs.version }}" `
+              -d ConfirmVbs="$confirm" `
               -o "dist-msi/format-tex-$($a.suffix).msi" 2>&1 |
               ForEach-Object { Write-Host "   wix: $_" }
             if ($LASTEXITCODE -ne 0) {
@@ -375,6 +384,38 @@ jobs:
             if ($product -ne $version) {
               throw "$($msi.Name): ProductVersion $product != $version"
             }
+            # upgrade wiring: stable UpgradeCode, RemoveExistingProducts and
+            # the native confirmation custom action must all be present
+            $upgrade_code = '6F3B0C2A-5D84-4E17-9A3C-1F0E7B2D54C8'
+            $uv = $db.OpenView('SELECT UpgradeCode FROM Upgrade')
+            $uv.Execute()
+            $found_code = $false
+            while ($null -ne ($r = $uv.Fetch())) {
+              if ($r.StringData(1).Trim('{}').ToUpperInvariant() -eq
+                  $upgrade_code) { $found_code = $true }
+            }
+            $uv.Close()
+            $seq = @{}
+            $sv = $db.OpenView('SELECT Action FROM InstallExecuteSequence')
+            $sv.Execute()
+            while ($null -ne ($r = $sv.Fetch())) { $seq[$r.StringData(1)] = $true }
+            $sv.Close()
+            $ca = @{}
+            $cv = $db.OpenView('SELECT Action FROM CustomAction')
+            $cv.Execute()
+            while ($null -ne ($r = $cv.Fetch())) { $ca[$r.StringData(1)] = $true }
+            $cv.Close()
+            $wired = ($found_code -and $seq['RemoveExistingProducts'] -and
+              $seq['AskCoverVersion'] -and $ca['AskCoverVersion'] -and
+              $ca['CoverVersionAbort'])
+            if (-not $wired) {
+              throw ("$($msi.Name): upgrade wiring incomplete " +
+                "(UpgradeCode $found_code, " +
+                "RemoveExistingProducts $($seq['RemoveExistingProducts']), " +
+                "AskCoverVersion $($seq['AskCoverVersion'])/$($ca['AskCoverVersion']), " +
+                "CoverVersionAbort $($ca['CoverVersionAbort']))")
+            }
+            Write-Host '  upgrade wired: ok'
             if ($msi.Name -like '*arm64*') {
               # an arm64 MSI cannot be admin-extracted on an x64 host, so
               # read the File table; names are stored as short|long
@@ -407,6 +448,60 @@ jobs:
             }
             Write-Host "$($msi.Name): verified (version $product)"
           }
+      - name: Upgrade regression test (silent install over the previous build)
+        shell: pwsh
+        timeout-minutes: 12
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Two consecutive versions from the same payload: installing the
+          # second silently must RemoveExistingProducts (leaving exactly one
+          # uninstall entry). The constant 1.0.0 version used to break this.
+          $dir = Join-Path $env:RUNNER_TEMP 'upgrade-test'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $payload = (Resolve-Path 'payloads/msi-payload-windows-x86_64').Path
+          $confirm = (Resolve-Path packaging/windows/confirm-upgrade.vbs).Path
+          foreach ($v in @('1.0.1', '1.0.2')) {
+            & wix build packaging/windows/format-tex.wxs -arch x64 `
+              -acceptEula wix7 `
+              -d PayloadDir="$payload" -d Version="$v" -d ConfirmVbs="$confirm" `
+              -o "$dir/upgrade-$v.msi" 2>&1 |
+              ForEach-Object { Write-Host "   wix: $_" }
+            if ($LASTEXITCODE -ne 0) { throw "wix build failed for $v" }
+          }
+
+          function Get-InstallCount {
+            $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
+            @(Get-ChildItem $key -ErrorAction SilentlyContinue | Where-Object {
+                (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).DisplayName
+                  -eq 'LaTeX Coding Style Formatter' }).Count
+          }
+          function Install-Msi($path) {
+            $p = Start-Process msiexec -Wait -PassThru -ArgumentList @(
+              '/i', "`"$path`"", '/qn', '/norestart')
+            # 0 = ok, 3010 = success (reboot recommended)
+            if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
+              throw "msiexec /i $path failed (exit $($p.ExitCode))"
+            }
+          }
+
+          $before = Get-InstallCount
+          if ($before -ne 0) { throw "unexpected pre-existing install ($before)" }
+
+          Install-Msi "$dir/upgrade-1.0.1.msi"
+          $one = Get-InstallCount
+          Write-Host "after 1.0.1: $one installed"
+
+          Install-Msi "$dir/upgrade-1.0.2.msi"
+          $two = Get-InstallCount
+          Write-Host "after 1.0.2: $two installed"
+
+          # best-effort cleanup so the runner is left clean
+          Start-Process msiexec -Wait -PassThru -ArgumentList @(
+            '/x', "`"$dir/upgrade-1.0.2.msi`"", '/qn', '/norestart') | Out-Null
+
+          if ($one -ne 1) { throw "expected 1 install after 1.0.1, got $one" }
+          if ($two -ne 1) { throw "upgrade left $two products (expected 1)" }
+          Write-Host 'upgrade replaces the previous version: ok'
       - uses: actions/upload-artifact@v7
         with:
           name: windows-msi
