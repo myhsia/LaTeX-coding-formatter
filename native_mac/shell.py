@@ -35,6 +35,8 @@ WINDOW_MIN = (760.0, 560.0)
 WINDOW_MARGIN = 20.0
 # gap between the sidebar group's section header and the card below it
 GROUP_HEADER_GAP = 4.0
+# gap between two stacked sidebar sections (header + card)
+SECTION_GAP = 16.0
 
 
 class NativeShell:
@@ -52,8 +54,8 @@ class NativeShell:
         self.toolbar_host = None
         self.footer_separator = None
         self.footer_host = None
-        self.sidebar_group = None
-        self.sidebar_group_header = None
+        # stacked sidebar sections, each a dict {'header', 'card', 'height'}
+        self.sections = []
         self.title_label = None
         self._delegate = None
         self._zoom_target = None
@@ -222,28 +224,30 @@ class NativeShell:
         self.band.setFrame_(((0.0, height - band_height),
                              (panel_width, band_height)))
 
-        # sidebar contents: section header + group at the top (below the
-        # band), then the file list, then the footer row
+        # sidebar contents: stacked sections (each a section header + a
+        # card) at the top (below the band), then the file list, then the
+        # footer row
         margin = WINDOW_MARGIN
         top = height - BAND_HEIGHT - margin
-        group_height = 179.0       # 4 x 44 pt grid rows + 3 hairlines
-        header_block = 0.0
-        if self.sidebar_group_header is not None:
-            header_h = self.sidebar_group_header.frame().size.height
-            self.sidebar_group_header.setFrame_(
-                ((margin, top - header_h),
-                 (max(1.0, sidebar_width - 2 * margin), header_h)))
-            self.sidebar_group_header.setHidden_(False)
-            header_block = header_h + GROUP_HEADER_GAP
-        if self.sidebar_group is not None:
-            self.sidebar_group.setFrame_(
-                ((margin, top - header_block - group_height),
-                 (max(1.0, sidebar_width - 2 * margin), group_height)))
+        card_width = max(1.0, sidebar_width - 2 * margin)
+        cursor = top
+        for index, section in enumerate(self.sections):
+            if index:
+                cursor -= SECTION_GAP
+            header = section['header']
+            header_h = header.frame().size.height
+            header.setFrame_(((margin, cursor - header_h),
+                              (card_width, header_h)))
+            header.setHidden_(False)
+            cursor -= header_h + GROUP_HEADER_GAP
+            card_h = float(section['height'])
+            section['card'].setFrame_(
+                ((margin, cursor - card_h), (card_width, card_h)))
+            cursor -= card_h
         self.sidebar_host.setFrame_(
             ((margin, FOOTER_HEIGHT),
-             (max(1.0, sidebar_width - 2 * margin),
-              max(1.0, top - header_block - group_height - margin
-                  - FOOTER_HEIGHT))))
+             (card_width,
+              max(1.0, cursor - margin - FOOTER_HEIGHT))))
         self.footer_host.setFrame_(((0.0, 0.0),
                                     (sidebar_width, FOOTER_HEIGHT)))
 
@@ -299,38 +303,35 @@ class NativeShell:
         self.title_label.setHidden_(False)
 
     # ---------- helpers ----------
-    def make_group_header(self, text):
-        """The native section header above the sidebar group (System
-        Settings style: 13 pt semibold, secondary label colour)."""
+    def make_section(self, title, height):
+        """A stacked sidebar section: a System-Settings-style header (13 pt
+        semibold, secondary label colour) above a rounded card ``height``
+        pt tall. Returns the card view (place the controls inside it)."""
         import AppKit
 
-        field = AppKit.NSTextField.alloc().init()
-        field.setBezeled_(False)
-        field.setDrawsBackground_(False)
-        field.setEditable_(False)
-        field.setSelectable_(False)
-        field.setStringValue_(text)
-        field.setFont_(AppKit.NSFont.systemFontOfSize_weight_(
+        header = AppKit.NSTextField.alloc().init()
+        header.setBezeled_(False)
+        header.setDrawsBackground_(False)
+        header.setEditable_(False)
+        header.setSelectable_(False)
+        header.setStringValue_(title)
+        header.setFont_(AppKit.NSFont.systemFontOfSize_weight_(
             13.0, AppKit.NSFontWeightSemibold))
-        field.setTextColor_(AppKit.NSColor.secondaryLabelColor())
-        field.sizeToFit()
-        self.sidebar_host.superview().addSubview_(field)
-        self.sidebar_group_header = field
-        return field
+        header.setTextColor_(AppKit.NSColor.secondaryLabelColor())
+        header.sizeToFit()
+        self.sidebar_host.superview().addSubview_(header)
 
-    def make_group_box(self):
-        """The sidebar's grouped settings box (rounded translucent)."""
-        import AppKit
-
-        box = AppKit.NSView.alloc().init()
-        box.setWantsLayer_(True)
-        box.layer().setBackgroundColor_(
+        card = AppKit.NSView.alloc().init()
+        card.setWantsLayer_(True)
+        card.layer().setBackgroundColor_(
             AppKit.NSColor.colorWithSRGBRed_green_blue_alpha_(
                 0.47, 0.47, 0.5, 0.12).CGColor())
-        box.layer().setCornerRadius_(8.0)
-        self.sidebar_group = box
-        self.sidebar_host.superview().addSubview_(box)
-        return box
+        card.layer().setCornerRadius_(8.0)
+        self.sidebar_host.superview().addSubview_(card)
+
+        self.sections.append(
+            {'header': header, 'card': card, 'height': float(height)})
+        return card
 
     def show(self):
         if self.window is not None:

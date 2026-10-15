@@ -21,7 +21,7 @@ warnings.filterwarnings('ignore', message='.*PyObjCPointer.*')
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from format_tex import (FormatOptions, format_file, format_source,  # noqa: E402
-                        scan_directory)
+                        normalize_extension, scan_directory)
 from format_tex_controller import FormatController  # noqa: E402
 from native_menu import CUSTOM_SENTINEL  # noqa: E402
 from native_mac import menus  # noqa: E402
@@ -35,7 +35,9 @@ from native_mac.shell import (BAND_HEIGHT, FOOTER_HEIGHT,  # noqa: E402
 from platform_effects import (ViewTarget, lights_inset,  # noqa: E402
                               title_gap)
 
-EXTENSIONS = ['*.tex', '*.ctx', '*.sty', '*.cls', '*.dtx', '*.txt']
+# default extensions (suffix form); the sidebar token field lists these and
+# the user can add/remove entries
+EXTENSIONS = ['.tex', '.ctx', '.sty', '.cls', '.dtx', '.txt']
 ENCODINGS = ['同输入', 'utf-8', 'utf-8-sig', 'gb2312', 'gbk', 'big5',
              'latin-1', 'cp1252']
 
@@ -61,7 +63,7 @@ class MacApp:
         self._status_encoding = False
         self._status_selected = False
         self.apply_button = None
-        self.ext_popup = None
+        self.ext_field = None
         self.enc_popup = None
         self.switch = None
         self.plus_minus = None
@@ -104,8 +106,8 @@ class MacApp:
     def _build_sidebar(self, AppKit):
         shell = self.shell
         # native section header above the group (System Settings style)
-        self.group_title = shell.make_group_header('常规')
-        group = shell.make_group_box()
+        group = shell.make_section('常规', 134.0)
+        self.group_card = group
 
         def label(text):
             field = AppKit.NSTextField.alloc().init()
@@ -127,18 +129,7 @@ class MacApp:
             group.addSubview_(line)
             return line
 
-        # extension popup + recursive switch, inside the group
-        host = AppKit.NSView.alloc().init()
-        host.setFrame_(((0.0, 0.0), (100.0, 24.0)))
-        group.addSubview_(host)
-        self.ext_host = host
-        self.ext_popup = NativePopUpButton(
-            None, ViewTarget(host), EXTENSIONS, '.tex',
-            on_change=self._extension_changed,
-            custom_label='其它')
-        self.ext_popup.build()
-
-        # encoding popup, in the middle row of the same group
+        # encoding popup, in the top row of the group
         enc_host = AppKit.NSView.alloc().init()
         enc_host.setFrame_(((0.0, 0.0), (100.0, 24.0)))
         group.addSubview_(enc_host)
@@ -148,13 +139,21 @@ class MacApp:
             on_change=lambda value: None, custom_label='其它')
         self.enc_popup.build()
 
-        self.ext_label = label('扩展名')
         self.enc_label = label('输出编码')
         self.switch_label = label('含子目录')
         self.backup_label = label('生成备份文件')
         self.group_separator = separator()
         self.group_separator2 = separator()
-        self.group_separator3 = separator()
+
+        # extension list (multi-value, editable) in its own section, as a
+        # native token field: type a suffix to add, ✕ to remove
+        ext_card = shell.make_section('扩展名', 56.0)
+        self.ext_card = ext_card
+        self.ext_field = AppKit.NSTokenField.alloc().init()
+        self.ext_field.setObjectValue_(list(EXTENSIONS))
+        self.ext_field.setFont_(AppKit.NSFont.systemFontOfSize_(13.0))
+        self.ext_field.setBezeled_(True)
+        ext_card.addSubview_(self.ext_field)
 
         switch = AppKit.NSSwitch.alloc().init()
         # the smaller Settings-style toggle (Regular is 38x22, Small 32x18)
@@ -365,7 +364,7 @@ class MacApp:
 
     def _popup_size(self):
         try:
-            size = self.ext_popup.view.frame().size
+            size = self.enc_popup.view.frame().size
             return (float(size.width), float(size.height))
         except Exception:
             return (120.0, 24.0)
@@ -376,46 +375,45 @@ class MacApp:
             import AppKit
 
             shell = self.shell
-            # group box: four Settings-style 44 pt rows with a hairline
+            # group box: three Settings-style 44 pt rows with a hairline
             # between them, label left, control right
-            group = self.shell.sidebar_group
+            group = self.group_card
             gb = group.bounds()
             row_h = 44.0
             margin = 0.0            # no top/bottom padding: equal 44 pt rows
             gap = 12.0
             width = gb.size.width
             rows = [gb.size.height - margin - row_h - i * (row_h + 1.0)
-                    for i in range(4)]
+                    for i in range(3)]
             for sep, ry in ((self.group_separator, rows[0]),
-                            (self.group_separator2, rows[1]),
-                            (self.group_separator3, rows[2])):
+                            (self.group_separator2, rows[1])):
                 sep.setFrame_(
                     ((gap, ry - 1.0), (max(1.0, width - 2 * gap), 1.0)))
-            for field, ry in ((self.ext_label, rows[0]),
-                              (self.enc_label, rows[1]),
-                              (self.switch_label, rows[2]),
-                              (self.backup_label, rows[3])):
+            for field, ry in ((self.enc_label, rows[0]),
+                              (self.switch_label, rows[1]),
+                              (self.backup_label, rows[2])):
                 lh = field.frame().size.height
                 field.setFrameOrigin_((gap, ry + (row_h - lh) / 2.0))
-            # extension popup (top row, right aligned, v-centred)
-            popup = self._popup_size()
-            self.ext_host.setFrame_(
-                ((width - gap - popup[0], rows[0] + (row_h - popup[1]) / 2.0),
-                 (popup[0], popup[1])))
-            self.ext_popup.place()
-            # encoding popup (second row)
+            # encoding popup (top row, right aligned, v-centred)
             enc = self.enc_popup.size()
             self.enc_host.setFrame_(
-                ((width - gap - enc[0], rows[1] + (row_h - enc[1]) / 2.0),
+                ((width - gap - enc[0], rows[0] + (row_h - enc[1]) / 2.0),
                  (enc[0], enc[1])))
             self.enc_popup.place()
-            # switches: 含子目录 (third row), 生成备份文件 (fourth row)
-            for sw, ry in ((self.switch, rows[2]),
-                           (self.backup_switch, rows[3])):
+            # switches: 含子目录 (second row), 生成备份文件 (third row)
+            for sw, ry in ((self.switch, rows[1]),
+                           (self.backup_switch, rows[2])):
                 size = sw.frame().size
                 sw.setFrameOrigin_(
                     (width - gap - size.width,
                      ry + (row_h - size.height) / 2.0))
+
+            # extension token field inside its own card
+            eb = self.ext_card.bounds()
+            field_h = 26.0
+            self.ext_field.setFrame_(
+                ((10.0, (eb.size.height - field_h) / 2.0),
+                 (max(1.0, eb.size.width - 20.0), field_h)))
 
             options = [c for _s, c in self.option_hosts]
             host = shell.content_host.bounds()
@@ -601,30 +599,23 @@ class MacApp:
         value = self.enc_popup.currentText().strip() if self.enc_popup else ''
         return None if (not value or value == '同输入') else value
 
-    def extension(self):
-        value = self.ext_popup.currentText().strip() if self.ext_popup else ''
-        return value or '.tex'
-
-    def _extension_changed(self, title):
-        if title == '其它':
-            custom = self._ask_text('自定义扩展名', '.tex')
-            if custom:
-                self.ext_popup.setCurrentText(custom)
-
-    def _ask_text(self, title, initial=''):
-        import AppKit
-
-        alert = AppKit.NSAlert.alloc().init()
-        alert.setMessageText_(title)
-        field = AppKit.NSTextField.alloc() \
-            .initWithFrame_(((0.0, 0.0), (220.0, 24.0)))
-        field.setStringValue_(initial)
-        alert.setAccessoryView_(field)
-        alert.addButtonWithTitle_('确定')
-        alert.addButtonWithTitle_('取消')
-        if alert.runModal() != 1000:
-            return ''
-        return str(field.stringValue())
+    def extensions(self):
+        """The extensions the folder scan matches, from the sidebar token
+        field (normalized suffixes, order preserved). An empty list matches
+        nothing."""
+        field = self.ext_field
+        if field is None:
+            return list(EXTENSIONS)
+        try:
+            values = field.objectValue() or []
+        except Exception:
+            values = []
+        out = []
+        for value in values:
+            text = normalize_extension(str(value))
+            if text and text not in out:
+                out.append(text)
+        return out
 
     def recursive(self):
         try:
@@ -641,12 +632,13 @@ class MacApp:
     def add_paths(self, paths):
         entries = []
         dirs = files = other = 0
+        extensions = self.extensions()
         for raw in paths:
             path = Path(raw)
             if path.is_dir():
                 dirs += 1
                 try:
-                    matches = scan_directory(path, self.extension(),
+                    matches = scan_directory(path, extensions,
                                              self.recursive())
                 except Exception:
                     matches = []
@@ -668,7 +660,8 @@ class MacApp:
             self.set_status(
                 '拖入/选择 {} 项 (目录 {} 文件 {} 其它 {}): 扩展名 {} · '
                 '含子目录 {} · 匹配 {} · 新增 {}'.format(
-                    len(paths), dirs, files, other, self.extension(),
+                    len(paths), dirs, files, other,
+                    ' '.join(extensions) or '无',
                     '开' if self.recursive() else '关', len(entries), added))
         except Exception:
             pass
@@ -952,29 +945,46 @@ def run_self_test(app):
         ok = ok and pm_ok
 
         # the sidebar group uses Settings-style 44 pt rows (45 pt pitch)
-        group_h = app.shell.sidebar_group.frame().size.height
-        pitch = (app.ext_host.frame().origin.y
-                 - app.enc_host.frame().origin.y)
-        rows_ok = abs(group_h - 179.0) < 1.5 and abs(pitch - 45.0) < 1.5
+        group_h = app.group_card.frame().size.height
+        pitch = (app.enc_label.frame().origin.y
+                 - app.switch_label.frame().origin.y)
+        rows_ok = abs(group_h - 134.0) < 1.5 and abs(pitch - 45.0) < 1.5
         lines.append('settings-style group rows (44 pt + hairline, group '
-                     '179 pt): {}'.format(rows_ok))
+                     '134 pt): {}'.format(rows_ok))
         ok = ok and rows_ok
 
-        # ... with a native "常规" section header above the card
-        header = app.shell.sidebar_group_header
-        header_ok = False
-        if header is not None:
-            hf = header.frame()
-            gf = app.shell.sidebar_group.frame()
-            gap = hf.origin.y - (gf.origin.y + gf.size.height)
-            header_ok = (str(header.stringValue()) == '常规'
-                         and header.font().pointSize() == 13.0
-                         and not header.isSelectable()
-                         and abs(gap - 4.0) < 1.0
-                         and abs(hf.origin.x - gf.origin.x) < 1.0)
-        lines.append('sidebar group title "常规" (13 pt, above the card): '
-                     '{}'.format(header_ok))
+        # ... with native section headers ("常规" + "扩展名") above their
+        # cards (13 pt semibold, 4 pt gap, left-aligned with the card)
+        sections = app.shell.sections
+        header_ok = len(sections) == 2
+        if header_ok:
+            for section, title in zip(sections, ('常规', '扩展名')):
+                header = section['header']
+                hf = header.frame()
+                cf = section['card'].frame()
+                gap = hf.origin.y - (cf.origin.y + cf.size.height)
+                header_ok = header_ok and (
+                    str(header.stringValue()) == title
+                    and header.font().pointSize() == 13.0
+                    and not header.isSelectable()
+                    and abs(gap - 4.0) < 1.0
+                    and abs(hf.origin.x - cf.origin.x) < 1.0)
+        lines.append('sidebar section headers "常规" + "扩展名" (13 pt, above '
+                     'their cards): {}'.format(header_ok))
         ok = ok and header_ok
+
+        # the extension token field holds the six default suffixes and
+        # add/remove edits are reflected by extensions()
+        tokens = [str(t) for t in (app.ext_field.objectValue() or [])]
+        tokens_ok = (tokens == EXTENSIONS
+                     and app.extensions() == EXTENSIONS)
+        app.ext_field.setObjectValue_(['.tex', '.md'])
+        edited_ok = app.extensions() == ['.tex', '.md']
+        app.ext_field.setObjectValue_(list(EXTENSIONS))
+        lines.append('extension token field defaults ({}) + edits: '
+                     '{}'.format(', '.join(EXTENSIONS),
+                                 tokens_ok and edited_ok))
+        ok = ok and tokens_ok and edited_ok
 
         # the sidebar is a fixed 232 pt with no divider to drag (a plain
         # container instead of a split view)
@@ -1125,8 +1135,7 @@ def run_self_test(app):
         # every native control's action must be implemented by its target,
         # or AppKit auto-disables it (gray popup menus / dead buttons)
         controls = [c.view for _slot, c in app.option_hosts]
-        controls += [app.ext_popup.view, app.enc_popup.view,
-                     app.apply_button.view]
+        controls += [app.enc_popup.view, app.apply_button.view]
         actions_ok = all(
             view.target() is not None and bool(view.action())
             and bool(view.target().respondsToSelector_(view.action()))
@@ -1135,28 +1144,12 @@ def run_self_test(app):
                      '{}'.format(actions_ok))
         ok = ok and actions_ok
 
-        # the extension popup's items must be enabled (regression: gray)
-        popup = app.ext_popup.view
-        popup.menu().update()
-        items = popup.menu().itemArray()
-        enabled_ok = all(bool(item.isEnabled()) for item in items)
-        lines.append('extension popup items enabled ({}): {}'.format(
-            len(items), enabled_ok))
-        ok = ok and enabled_ok
-
-        # ... and selecting one must fire on_change
-        seen = []
-        original_change = app.ext_popup.on_change
-        app.ext_popup.on_change = seen.append
-        popup.selectItemAtIndex_(1)
-        AppKit.NSApp().sendAction_to_from_(
-            popup.action(), popup.target(), popup)
-        app.ext_popup.on_change = original_change
-        fired_ok = seen == [popup.itemTitleAtIndex_(1)]
-        popup.selectItemWithTitle_('.tex')
-        lines.append('extension popup selection fires on_change: {}'.format(
-            fired_ok))
-        ok = ok and fired_ok
+        # the extension list is a native token field (removable tokens)
+        token_ok = (isinstance(app.ext_field, AppKit.NSTokenField)
+                    and app.ext_field.isEditable())
+        lines.append('extension list is a native editable NSTokenField: '
+                     '{}'.format(token_ok))
+        ok = ok and token_ok
 
         # a native checkbox click toggles the control
         probe = app.option_controls['check']

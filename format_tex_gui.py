@@ -29,16 +29,17 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
                                QComboBox, QFileDialog, QFileIconProvider,
                                QFrame, QGridLayout,
                                QHBoxLayout,
-                               QInputDialog, QLabel, QListWidget,
+                               QInputDialog, QLabel, QLayout, QListWidget,
                                QListWidgetItem,
                                QMainWindow, QMessageBox,
-                               QPushButton, QSplitter, QStyle,
-                               QStyledItemDelegate, QStyleOptionComboBox,
-                               QStyleOptionViewItem, QVBoxLayout,
+                               QPushButton, QSizePolicy, QSplitter, QStyle,
+                               QStyledItemDelegate, QStyleOptionViewItem,
+                               QToolButton, QVBoxLayout,
                                QWidget)
 
 from format_tex import (FormatOptions, backup_path, format_file,
-                        format_source, make_backup, scan_directory)
+                        format_source, make_backup, normalize_extension,
+                        scan_directory)
 from diff_view import DiffTextEdit, create_diff_view
 from format_tex_controller import FormatController
 from format_tex_theme import DARK, LIGHT
@@ -74,7 +75,7 @@ import win11_style
 
 ENCODINGS = ['同输入', 'utf-8', 'gb18030', 'gbk', 'gb2312', 'big5',
              'utf-16', 'latin-1']
-EXTENSIONS = ['*.tex', '*.ctx', '*.sty', '*.cls', '*.dtx', '*.txt']
+EXTENSIONS = ['.tex', '.ctx', '.sty', '.cls', '.dtx', '.txt']
 
 
 
@@ -705,6 +706,185 @@ class NativeMenuCombo(QComboBox):
             self.setCurrentText(text)
 
 
+class FlowLayout(QLayout):
+    """A left-to-right layout that wraps its items onto new rows (Qt's
+    canonical FlowLayout); used by the extension chips so they wrap inside
+    the narrow sidebar."""
+
+    def __init__(self, parent=None, margin=0, spacing=6):
+        super().__init__(parent)
+        self._items = []
+        self.setContentsMargins(margin, margin, margin, margin)
+        self.setSpacing(spacing)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):
+        if 0 <= index < len(self._items):
+            return self._items[index]
+        return None
+
+    def takeAt(self, index):
+        if 0 <= index < len(self._items):
+            return self._items.pop(index)
+        return None
+
+    def expandingDirections(self):
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._do_layout(QRect(0, 0, width, 0), True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._do_layout(rect, False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        margins = self.contentsMargins()
+        size += QSize(margins.left() + margins.right(),
+                      margins.top() + margins.bottom())
+        return size
+
+    def _do_layout(self, rect, test_only):
+        margins = self.contentsMargins()
+        effective = rect.adjusted(margins.left(), margins.top(),
+                                  -margins.right(), -margins.bottom())
+        x, y = effective.x(), effective.y()
+        line_height = 0
+        spacing = self.spacing()
+        for item in self._items:
+            hint = item.sizeHint()
+            next_x = x + hint.width() + spacing
+            if next_x - spacing > effective.right() and line_height > 0:
+                x = effective.x()
+                y = y + line_height + spacing
+                next_x = x + hint.width() + spacing
+                line_height = 0
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), hint))
+            x = next_x
+            line_height = max(line_height, hint.height())
+        return y + line_height - rect.y() + margins.bottom()
+
+
+class ChipLabel(QLabel):
+    """A chip's text label (kept as a class so the self-test can find it)."""
+
+
+class ExtensionChips(QWidget):
+    """The extension list as removable chips + a "+" button (the macOS
+    token field's Qt counterpart). ``values()`` returns the current
+    normalized suffixes; an empty list matches nothing when scanning."""
+
+    def __init__(self, extensions, window, on_change=None, parent=None):
+        super().__init__(parent)
+        self.window = window
+        self.on_change = on_change
+        self._values = []
+        self._flow = FlowLayout(self, margin=0, spacing=6)
+        self.add_button = QToolButton(self)
+        self.add_button.setObjectName('chipadd')
+        self.add_button.setText('+')
+        self.add_button.setToolTip('添加扩展名')
+        self.add_button.setAutoRaise(True)
+        self.add_button.setFixedSize(22, 22)
+        self.add_button.clicked.connect(self._prompt_add)
+        self.setValues(extensions)
+        policy = QSizePolicy(QSizePolicy.Policy.Preferred,
+                             QSizePolicy.Policy.Minimum)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._flow.heightForWidth(width)
+
+    def values(self):
+        return list(self._values)
+
+    def setValues(self, extensions):
+        self._values = []
+        for value in extensions:
+            text = normalize_extension(value)
+            if text and text not in self._values:
+                self._values.append(text)
+        self._rebuild()
+
+    def addValue(self, value):
+        text = normalize_extension(value)
+        if text and text not in self._values:
+            self._values.append(text)
+            self._rebuild()
+            self._emit()
+        return text
+
+    def removeValue(self, value):
+        text = normalize_extension(value)
+        if text in self._values:
+            self._values.remove(text)
+            self._rebuild()
+            self._emit()
+
+    def _emit(self):
+        if callable(self.on_change):
+            self.on_change(self.values())
+
+    def _prompt_add(self):
+        text, ok = QInputDialog.getText(self, '添加扩展名',
+                                        '扩展名 (如 .tex):')
+        if ok and text.strip():
+            self.addValue(text)
+
+    def _rebuild(self):
+        while self._flow.count():
+            item = self._flow.takeAt(0)
+            widget = item.widget()
+            if widget is not None and widget is not self.add_button:
+                widget.deleteLater()
+        for value in self._values:
+            chip = QFrame(self)
+            chip.setObjectName('chip')
+            chip.setStyleSheet(
+                '#chip { background: rgba(120, 120, 128, 0.18);'
+                ' border-radius: 9px; }')
+            if sys.platform == 'win32':
+                win11_style.apply_card(chip, self.window.dark)
+            lay = QHBoxLayout(chip)
+            lay.setContentsMargins(9, 1, 3, 1)
+            lay.setSpacing(2)
+            label = ChipLabel(value, chip)
+            lay.addWidget(label)
+            close = QToolButton(chip)
+            close.setObjectName('chipclose')
+            close.setText('✕')
+            close.setAutoRaise(True)
+            close.setFixedSize(16, 16)
+            close.setToolTip('移除 {}'.format(value))
+            close.clicked.connect(
+                lambda _checked=False, v=value: self.removeValue(v))
+            lay.addWidget(close)
+            self._flow.addWidget(chip)
+        self._flow.addWidget(self.add_button)
+        self.add_button.show()
+        self.updateGeometry()
+        self.update()
+
+
 class MainWindow(QMainWindow):
 
     def __init__(self):
@@ -773,19 +953,7 @@ class MainWindow(QMainWindow):
                 '#rowsep { background: rgba(120, 120, 128, 0.28); }')
             return sep
 
-        ext_row = QHBoxLayout()
-        ext_row.setContentsMargins(0, 10, 0, 10)   # Settings-like 44 pt row
-        ext_row.addWidget(QLabel('扩展名'))
-        ext_row.addStretch(1)
-        self.ext_edit = PopUpControl(NativeMenuCombo(EXTENSIONS, '.tex'),
-                                     EXTENSIONS, '.tex', self,
-                                     custom_label=NativeMenuCombo.CUSTOM_LABEL)
-        ext_row.addWidget(self.ext_edit.qt)
-        ext_row.addWidget(self.ext_edit.slot)
-        gv.addLayout(ext_row)
-        gv.addWidget(row_separator())
-
-        # the encoding selector lives in the sidebar, just after 扩展名
+        # the encoding selector is the top row of the group
         enc_row = QHBoxLayout()
         enc_row.setContentsMargins(0, 10, 0, 10)   # Settings-like 44 pt row
         enc_row.addWidget(QLabel('输出编码'))
@@ -826,7 +994,34 @@ class MainWindow(QMainWindow):
         gv.addLayout(bak_row)
         self.rec_switch = None            # Win11Switch on Windows
         self.backup_switch = None
+        header_qss = (
+            '#sectionheader {{ color: rgba(120, 120, 128, 0.92);'
+            ' font-size: 12px; font-weight: 600; }}')
+        group_header = QLabel('常规')
+        group_header.setObjectName('sectionheader')
+        group_header.setStyleSheet(header_qss)
+        slayout.addWidget(group_header)
         slayout.addWidget(group)
+
+        # extension list (multi-value, add/remove) on its own section card
+        ext_header = QLabel('扩展名')
+        ext_header.setObjectName('sectionheader2')
+        ext_header.setStyleSheet(header_qss)
+        self.ext_chips = ExtensionChips(EXTENSIONS, self)
+        ext_card = QFrame()
+        ext_card.setObjectName('extgroup')
+        ext_card.setStyleSheet(
+            '#extgroup { background: rgba(120, 120, 128, 0.12);'
+            ' border-radius: 8px; }')
+        if sys.platform == 'win32':
+            win11_style.apply_card(ext_card, self.dark)
+        ev = QVBoxLayout(ext_card)
+        ev.setContentsMargins(10, 8, 10, 8)
+        ev.setSpacing(0)
+        ev.addWidget(self.ext_chips)
+        slayout.addWidget(ext_header)
+        self.ext_card = ext_card
+        slayout.addWidget(ext_card)
 
         # --- framed file list with a +/- bar (System Settings style) ---
         self.file_list = DropListWidget(self.drop_paths, self.add_files,
@@ -1309,7 +1504,7 @@ class MainWindow(QMainWindow):
         for _slot, wrapper in self._option_widgets:
             wrapper.build_native()
         _selftest_note('building single controls')
-        for wrapper in (self.ext_edit, self.enc_out, self.btn_apply,
+        for wrapper in (self.enc_out, self.btn_apply,
                         self.status_label):
             wrapper.build_native()
         _selftest_note('building file list')
@@ -1343,8 +1538,7 @@ class MainWindow(QMainWindow):
             self.diff_view.place()
         for _slot, wrapper in getattr(self, '_option_widgets', ()):
             wrapper.place()
-        for wrapper in (getattr(self, 'ext_edit', None),
-                        getattr(self, 'enc_out', None),
+        for wrapper in (getattr(self, 'enc_out', None),
                         getattr(self, 'btn_apply', None),
                         getattr(self, 'status_label', None)):
             if wrapper is not None:
@@ -1567,57 +1761,35 @@ class MainWindow(QMainWindow):
                          '{}'.format(group_ok))
             ok = ok and group_ok
 
-            # the extension control fills its menu width, keeps the
-            # ".tex" label visible and is right-aligned in the group
-            if getattr(self.ext_edit, 'native', None) is not None \
-                    and self.ext_edit.native.active:
-                slot = self.ext_edit.slot
-                group = self.ext_edit.qt.parentWidget()
-                row = group.layout()
-                margin = None
-                for i in range(row.count()):
-                    item = row.itemAt(i)
-                    if item is not None and item.widget() is slot:
-                        pass
-                right_aligned = abs(
-                    slot.geometry().right()
-                    - (group.width() - 10)) < 3
-                native = self.ext_edit.native.view
-                titles = [native.itemTitleAtIndex_(i)
-                          for i in range(native.numberOfItems())]
-                width = native.frame().size.width
-                # the slot has a floor width, so the popup only
-                # has to fit inside it
-                fits = width <= slot.width() + 1 and width >= 60
-                ext_ok = (right_aligned and fits
-                          and self.ext_edit.items[0] in titles
-                          and (self.ext_edit.custom_label or '') in titles)
-                lines.append('extension control: native NSPopUpButton '
-                             '({:.0f} pt) with {} items, right-aligned {}, '
-                             'inside its slot {}: {}'.format(
-                                 width, len(titles), right_aligned, fits,
-                                 ext_ok))
-            else:
-                ext_w = self.ext_edit.qt.width()
-                row = self.ext_edit.qt.parentWidget().layout()
-                right_aligned = abs(
-                    self.ext_edit.qt.geometry().right()
-                    - (self.ext_edit.qt.parentWidget().width()
-                       - row.contentsMargins().right())) < 2
-                opt = QStyleOptionComboBox()
-                self.ext_edit.qt.initStyleOption(opt)
-                arrow = self.ext_edit.qt.style().subControlRect(
-                    QStyle.ComplexControl.CC_ComboBox, opt,
-                    QStyle.SubControl.SC_ComboBoxArrow, self.ext_edit.qt)
-                text_w = QFontMetrics(self.ext_edit.qt.font()) \
-                    .horizontalAdvance('.tex')
-                slack = ext_w - arrow.width() - text_w
-                ext_ok = right_aligned and slack >= 6
-                lines.append('extension button auto-sized ({:.0f} pt, arrow '
-                             '{:.0f}, slack {:.0f}) and right-aligned: '
-                             '{}'.format(ext_w, arrow.width(), slack,
-                                         ext_ok))
-            ok = ok and ext_ok
+            # the extension list is a chip list: the six defaults are
+            # present and add/remove are reflected by extensions()
+            chips = self.ext_chips
+            chip_values = chips.values()
+            chips.addValue('.md')
+            added_ok = (chips.values() == chip_values + ['.md']
+                        and self.extensions() == chip_values + ['.md'])
+            chips.removeValue('.md')
+            removed_ok = (chips.values() == chip_values
+                          and self.extensions() == chip_values)
+            chips_ok = (chip_values == [normalize_extension(e)
+                                        for e in EXTENSIONS]
+                        and added_ok and removed_ok)
+            lines.append('extension chips default ({}) + add/remove: '
+                         '{}'.format(' '.join(chip_values), chips_ok))
+            ok = ok and chips_ok
+
+            # the section headers "常规" + "扩展名" sit above their cards
+            labels = list(self.centralWidget()
+                          .findChildren(QLabel, 'sectionheader'))
+            labels += list(self.centralWidget()
+                           .findChildren(QLabel, 'sectionheader2'))
+            ext_card = self.centralWidget().findChild(QFrame, 'extgroup')
+            headers_ok = (ext_card is not None
+                          and any(w.text() == '常规' for w in labels)
+                          and any(w.text() == '扩展名' for w in labels))
+            lines.append('sidebar section headers "常规" + "扩展名": '
+                         '{}'.format(headers_ok))
+            ok = ok and headers_ok
 
             # the native NSSwitch is overlaid on its slot; verify in
             # SCREEN coordinates so the check is independent of the
@@ -1832,30 +2004,22 @@ class MainWindow(QMainWindow):
             lines.append('dropdown menu model (order/check/custom): '
                          '{}'.format(model_ok))
             ok = ok and model_ok
-            if getattr(self.ext_edit, 'native', None) is not None \
-                    and self.ext_edit.native.active \
-                    and getattr(self.enc_out, 'native', None) is not None \
+            if getattr(self.enc_out, 'native', None) is not None \
                     and self.enc_out.native.active:
-                combos_ok = (self.ext_edit.native.view.numberOfItems()
-                             == len(self.ext_edit.items) + 1
-                             and self.enc_out.native.view.numberOfItems()
+                combos_ok = (self.enc_out.native.view.numberOfItems()
                              == len(self.enc_out.items) + 1
-                             and self.ext_edit.currentText()
                              and self.enc_out.currentText())
             else:
-                combos_ok = (isinstance(self.ext_edit.qt, NativeMenuCombo)
-                             and isinstance(self.enc_out.qt, NativeMenuCombo)
-                             and not self.ext_edit.qt.isEditable()
+                combos_ok = (isinstance(self.enc_out.qt, NativeMenuCombo)
                              and not self.enc_out.qt.isEditable())
-            lines.append('dropdowns ({}): {}'.format(
-                'native NSPopUpButton' if getattr(self.ext_edit, 'native',
+            lines.append('encoding dropdown ({}): {}'.format(
+                'native NSPopUpButton' if getattr(self.enc_out, 'native',
                                                   None) is not None
-                and self.ext_edit.native.active else 'Qt combo',
+                and self.enc_out.native.active else 'Qt combo',
                 combos_ok))
             ok = ok and combos_ok
 
-            # 输出编码: popup exactly the button width; 扩展名: narrow
-            # button with a popup that grows to fit its items (native)
+            # 输出编码: popup exactly the button width (native/Qt)
             def popup_for(combo):
                 combo_items = [combo.itemText(i)
                                for i in range(combo.count())]
@@ -1864,21 +2028,17 @@ class MainWindow(QMainWindow):
                     NativeMenuCombo.CUSTOM_LABEL, min_width=combo.width())
                 return menu
 
-            if getattr(self.ext_edit, 'native', None) is not None \
-                    and self.ext_edit.native.active:
-                # the native popups carry their own menu; just confirm both
-                # are inside their slots
-                width_ok = all(
-                    abs(w.native.size()[1] - w.slot.height()) <= 4
-                    for w in (self.ext_edit, self.enc_out))
+            if getattr(self.enc_out, 'native', None) is not None \
+                    and self.enc_out.native.active:
+                # the native popup carries its own menu; just confirm it is
+                # inside its slot
+                width_ok = abs(self.enc_out.native.size()[1]
+                               - self.enc_out.slot.height()) <= 4
             else:
                 enc_menu = popup_for(self.enc_out.qt)
-                ext_menu = popup_for(self.ext_edit.qt)
-                width_ok = (
-                    abs(enc_menu.size().width - self.enc_out.qt.width()) < 1
-                    and abs(ext_menu.size().width
-                            - self.ext_edit.qt.width()) < 1)
-            lines.append('popup fits its control for both dropdowns: '
+                width_ok = (abs(enc_menu.size().width
+                                - self.enc_out.qt.width()) < 1)
+            lines.append('popup fits its control for the encoding dropdown: '
                          '{}'.format(width_ok))
             ok = ok and width_ok
 
@@ -2291,7 +2451,7 @@ class MainWindow(QMainWindow):
             # menus and the buttons do nothing (a weak-target regression)
             native_views = [wr.native.view for wr in wrappers
                             if wr.native is not None and wr.native.active]
-            for wrapper in (self.ext_edit, self.enc_out, self.btn_apply):
+            for wrapper in (self.enc_out, self.btn_apply):
                 if wrapper.native is not None and wrapper.native.active:
                     native_views.append(wrapper.native.view)
             actions_ok = all(
@@ -2677,10 +2837,10 @@ class MainWindow(QMainWindow):
 
         options = [wr for _s, wr in self._option_widgets]
         active = sum(1 for wr in options if native_on(wr))
-        note('controls: {} (options {}/{} ext {} enc {} apply {} '
+        note('controls: {} (options {}/{} ext chips {} enc {} apply {} '
              'status {})'.format(
                  'native' if active else 'qt', active, len(options),
-                 native_on(self.ext_edit), native_on(self.enc_out),
+                 len(self.extensions()), native_on(self.enc_out),
                  native_on(self.btn_apply), native_on(self.status_label)))
         ok = True
 
@@ -2723,6 +2883,21 @@ class MainWindow(QMainWindow):
         ok = ok and self.backup_enabled()
         note('tie option present: {}'.format(hasattr(self, 'chk_tie')))
         ok = ok and hasattr(self, 'chk_tie')
+
+        # the extension list is a chip list: defaults present, add/remove
+        # reflected by extensions() (drives the folder scan)
+        chips = self.ext_chips
+        chip_default = [normalize_extension(e) for e in EXTENSIONS]
+        chips_ok = chips.values() == chip_default
+        chips.addValue('.md')
+        chips_ok = (chips_ok
+                    and chips.values() == chip_default + ['.md']
+                    and self.extensions() == chip_default + ['.md'])
+        chips.removeValue('.md')
+        chips_ok = chips_ok and chips.values() == chip_default \
+            and self.extensions() == chip_default
+        note('extension chips default + add/remove: {}'.format(chips_ok))
+        ok = ok and chips_ok
         return ok
 
     def _self_test_win32_geometry(self, note):
@@ -3072,6 +3247,15 @@ class MainWindow(QMainWindow):
 
     # ---------- actions ----------
 
+    def extensions(self):
+        """The extensions the folder scan matches, from the sidebar chip
+        list (normalized suffixes, order preserved). An empty list matches
+        nothing."""
+        chips = getattr(self, 'ext_chips', None)
+        if chips is None:
+            return [normalize_extension(e) for e in EXTENSIONS]
+        return chips.values()
+
     def add_files(self):
         names, _filter = QFileDialog.getOpenFileNames(
             self, '选择 TeX 文件', '',
@@ -3089,9 +3273,7 @@ class MainWindow(QMainWindow):
         if not directory:
             return
         try:
-            matches = scan_directory(Path(directory),
-                                     self.ext_edit.currentText().strip()
-                                     or '.tex',
+            matches = scan_directory(Path(directory), self.extensions(),
                                      self.recursive_enabled())
         except Exception:
             self.show_error(traceback.format_exc())
@@ -3101,9 +3283,9 @@ class MainWindow(QMainWindow):
     def drop_paths(self, paths):
         """Handle paths dropped onto the file list: loose files are
         added as-is; folders are scanned with the current scan
-        settings (extension + recursion checkbox)."""
+        settings (extension list + recursion checkbox)."""
         try:
-            ext = self.ext_edit.currentText().strip() or '.tex'
+            exts = self.extensions()
             recursive = self.recursive_enabled()
             collected = []
             seen = set()
@@ -3112,7 +3294,7 @@ class MainWindow(QMainWindow):
                 path = Path(p)
                 if path.is_dir():
                     dirs += 1
-                    for m in scan_directory(path, ext, recursive):
+                    for m in scan_directory(path, exts, recursive):
                         if str(m) not in seen:
                             seen.add(str(m))
                             collected.append((str(m), str(path)))
@@ -3128,7 +3310,8 @@ class MainWindow(QMainWindow):
             # folder with no matching files adds nothing: say so and why
             summary = ('拖入/选择 {} 项 (目录 {} 文件 {} 其它 {}): 扩展名 {} · '
                        '含子目录 {} · 匹配 {} · 新增 {}'.format(
-                           len(paths), dirs, files, other, ext,
+                           len(paths), dirs, files, other,
+                           ' '.join(exts) or '无',
                            '开' if recursive else '关', len(collected),
                            added))
             self.set_status(summary)

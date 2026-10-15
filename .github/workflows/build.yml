@@ -180,6 +180,21 @@ jobs:
             --tie --no-backup tie3.tex
           grep -qF '\hfill ' tie3.tex
           ! grep -qF '\hfill~' tie3.tex
+          # --extension accepts several suffixes (repeatable / comma-separated)
+          mkdir -p ext-root
+          printf '\xe4\xb8\xad\xe6\x96\x87English\xe4\xb8\xad\xe6\x96\x87\n' \
+            > ext-root/a.tex
+          printf '\xe4\xb8\xad\xe6\x96\x87English\xe4\xb8\xad\xe6\x96\x87\n' \
+            > ext-root/b.ctx
+          printf 'plain\n' > ext-root/c.md
+          ./dist/format-tex-${{ matrix.suffix }}${{ matrix.ext }} \
+            --no-backup --extension .tex --extension .ctx ext-root
+          grep -q $'\xe4\xb8\xad\xe6\x96\x87 English \xe4\xb8\xad\xe6\x96\x87' \
+            ext-root/a.tex
+          grep -q $'\xe4\xb8\xad\xe6\x96\x87 English \xe4\xb8\xad\xe6\x96\x87' \
+            ext-root/b.ctx
+          # a suffix not in the list is left untouched
+          grep -q '^plain$' ext-root/c.md
       - name: GUI self-test (macOS)
         if: runner.os == 'macOS'
         timeout-minutes: 6
@@ -189,6 +204,7 @@ jobs:
           "$GITHUB_WORKSPACE/dist/format-tex-gui-macos-arm64" --self-test
           cat format_tex_mac_selftest.txt
           grep -q '^PASS' format_tex_mac_selftest.txt
+          grep -q 'extension token field defaults' format_tex_mac_selftest.txt
       - name: GUI self-test (Windows)
         if: runner.os == 'Windows'
         timeout-minutes: 6
@@ -224,6 +240,8 @@ jobs:
           grep -q 'file list: natTrue/active:True' format_tex_gui_selftest.txt
           # ... and the option controls are drawn by Qt (Win11 dark style).
           grep -q 'controls: qt' format_tex_gui_selftest.txt
+          grep -q 'extension chips default + add/remove: True' \
+            format_tex_gui_selftest.txt
           grep -q 'qt style:' format_tex_gui_selftest.txt
           # ... and the host must not be layered (a layered host does not
           # render its child HWNDs, which hid every hosted control).

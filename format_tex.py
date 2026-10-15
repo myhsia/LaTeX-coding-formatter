@@ -65,7 +65,8 @@ Usage
                           skip "% !TeX encoding" magic comments
                           (default: add when missing)
     python3 format_tex.py --extension .ctx .     scan the directory for
-                          *.ctx files (--recursive to include subdirs)
+                          *.ctx files (--recursive to include subdirs);
+                          repeat --extension (or comma-separate) for several
 """
 
 import argparse
@@ -519,25 +520,34 @@ def _use_utf8_stdio():
             pass
 
 
-def scan_directory(directory, ext, recursive=False):
-    """Return files under ``directory`` whose suffix matches ``ext``
-    (case-insensitive), sorted. ``ext`` may be a suffix (``tex``,
-    ``.tex``) or a glob (``*.tex``, which is what the GUI's extension
-    menu holds); ``recursive`` includes subdirectories."""
-    ext = ext.strip()
-    if not ext:
-        ext = '.tex'
-    if ext.startswith('*'):
-        ext = ext[1:]              # '*.tex' -> '.tex'
-    if not ext.startswith('.'):
-        ext = '.' + ext
+def normalize_extension(ext):
+    """``'*.tex'`` / ``'tex'`` / ``'.tex'`` -> ``'.tex'`` (lower-cased)."""
+    text = str(ext).strip()
+    if text.startswith('*'):
+        text = text[1:]                # '*.tex' -> '.tex'
+    if text and not text.startswith('.'):
+        text = '.' + text
+    return text.lower()
+
+
+def scan_directory(directory, exts, recursive=False):
+    """Return files under ``directory`` whose suffix matches any of
+    ``exts`` (case-insensitive), sorted. ``exts`` is one suffix/glob
+    (``tex``, ``.tex``, ``*.tex``) or a list of them; an empty list
+    matches nothing. ``recursive`` includes subdirectories."""
+    if isinstance(exts, (str, bytes)):
+        exts = [exts]
+    wanted = {normalize_extension(e) for e in exts}
+    wanted.discard('')
+    if not wanted:
+        return []
     entries = directory.rglob('*') if recursive else directory.iterdir()
     matches = [p for p in entries
-               if p.is_file() and p.suffix.lower() == ext.lower()]
+               if p.is_file() and p.suffix.lower() in wanted]
     return sorted(matches)
 
 
-def expand_targets(paths, ext, recursive=False, with_roots=False):
+def expand_targets(paths, exts, recursive=False, with_roots=False):
     """Expand directories among ``paths`` into scanned files, keeping
     plain files as-is; deduplicates while preserving order.
 
@@ -550,7 +560,7 @@ def expand_targets(paths, ext, recursive=False, with_roots=False):
     for path in paths:
         if path.is_dir():
             root = path
-            candidates = scan_directory(path, ext, recursive)
+            candidates = scan_directory(path, exts, recursive)
         else:
             root = path.parent
             candidates = [path]
@@ -595,8 +605,11 @@ def main(argv=None):
                         help='encoding for the written file(s) '
                              '(default: same as each file\'s detected '
                              'encoding)')
-    parser.add_argument('--extension', metavar='EXT', default='.tex',
-                        help='file extension used when scanning directories '
+    parser.add_argument('--extension', metavar='EXT', action='append',
+                        default=None,
+                        help='file extension used when scanning directories; '
+                             'repeat it (or comma-separate) for several, e.g. '
+                             '--extension .tex --extension .ctx '
                              '(default: .tex)')
     parser.add_argument('--recursive', action='store_true',
                         help='scan directories recursively (includes '
@@ -613,7 +626,14 @@ def main(argv=None):
         write_encoding=args.output_encoding,
     )
 
-    targets = expand_targets(args.files, args.extension, args.recursive,
+    extensions = []
+    for value in (args.extension or []):
+        for part in str(value).split(','):
+            if part.strip():
+                extensions.append(part.strip())
+    if not extensions:
+        extensions = ['.tex']
+    targets = expand_targets(args.files, extensions, args.recursive,
                              with_roots=True)
     if not targets:
         print('no files found (check --extension / --recursive)')
