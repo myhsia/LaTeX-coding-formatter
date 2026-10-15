@@ -106,6 +106,8 @@ PyInstaller 不支持跨平台编译, Windows/Linux 版本通过 CI 在对应系
   (`UILevel != 2`) 时运行, 静默安装 (`/qn`) 不会弹出. CI 会校验
   `Upgrade`/`InstallExecuteSequence`/`CustomAction` 表并实际静默安装两个连续版本,
   断言只剩一个安装记录.
+  (VBScript 已被 Windows 列为弃用组件, 构建时 WiX 会给出 `WIX1163` 提示;
+  若将来系统不再自带, 可改为 MSI UI (`WixToolset.UI.wixext`) 的对话框.)
 
 ### macOS 安装镜像 (DMG)
 
