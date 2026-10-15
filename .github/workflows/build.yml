@@ -519,7 +519,7 @@ jobs:
             }
             $ok = Select-String -Path $log `
               -Pattern 'Installation success or error status: 0' -Quiet
-            if (-not $ok) { throw "$path: no success line in the install log" }
+            if (-not $ok) { throw "${path}: no success line in the install log" }
           }
 
           $old_code = Get-ProductCode $msis['1.0.1']
