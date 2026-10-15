@@ -484,22 +484,42 @@ jobs:
             $view.Close()
             $code
           }
-          function Get-Installed($code) {
-            try { return [string]$installer.ProductInfo($code, 'VersionString') }
-            catch { return '' }
+          # every installed product with our name, wherever the ARP entry
+          # lives (per-user HKCU or per-machine HKLM, incl. WOW6432Node)
+          function Get-Installs {
+            $roots = @(
+              'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
+              'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
+              'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')
+            $found = @()
+            foreach ($r in $roots) {
+              $found += @(Get-ChildItem $r -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                  $p = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+                  if ($p.DisplayName -like '*LaTeX Coding Style Formatter*') {
+                    [pscustomobject]@{
+                      Key = $_.Name
+                      Version = $p.DisplayVersion
+                    }
+                  }
+                })
+            }
+            return @($found)
           }
           function Install-Msi($path) {
             $log = "$path.log"
             $p = Start-Process msiexec -Wait -PassThru -ArgumentList @(
               '/i', "`"$path`"", '/qn', '/norestart', '/l*v', "`"$log`"")
-            Write-Host "msiexec exit $($p.ExitCode); log $log"
-            Get-Content $log -Tail 25 -ErrorAction SilentlyContinue |
-              Where-Object { $_ -match 'status|error|Product:|ALLUSERS|INSTALL|Note: 1:' } |
-              Select-Object -Last 12 | ForEach-Object { Write-Host "   log: $_" }
+            Write-Host "msiexec exit $($p.ExitCode)"
             # 0 = ok, 3010 = success (reboot recommended)
             if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
+              Get-Content $log -Tail 40 -ErrorAction SilentlyContinue |
+                ForEach-Object { Write-Host "   log: $_" }
               throw "msiexec /i $path failed (exit $($p.ExitCode))"
             }
+            $ok = Select-String -Path $log `
+              -Pattern 'Installation success or error status: 0' -Quiet
+            if (-not $ok) { throw "$path: no success line in the install log" }
           }
 
           $old_code = Get-ProductCode $msis['1.0.1']
@@ -508,30 +528,31 @@ jobs:
           if ($old_code -eq $new_code) {
             throw 'the two builds share a ProductCode (not a major upgrade)'
           }
-          if ((Get-Installed $old_code) -or (Get-Installed $new_code)) {
-            throw 'a test product is already installed'
-          }
+          $before = @(Get-Installs)
+          Write-Host "before: $($before.Count) install(s)"
+          if ($before.Count -ne 0) { throw 'a test product is already installed' }
 
           Install-Msi $msis['1.0.1']
-          $old_one = Get-Installed $old_code
-          $new_one = Get-Installed $new_code
-          $gui = Join-Path $env:LOCALAPPDATA 'LaTeX Coding Style Formatter\format-tex-gui.exe'
-          Write-Host "after 1.0.1: old='$old_one' new='$new_one' gui=$(Test-Path $gui)"
+          $one = @(Get-Installs)
+          $one_v = ($one | ForEach-Object { $_.Version }) -join ', '
+          Write-Host "after 1.0.1: $($one.Count) install(s), versions: $one_v"
 
           Install-Msi $msis['1.0.2']
-          $old_two = Get-Installed $old_code
-          $new_two = Get-Installed $new_code
-          Write-Host "after 1.0.2: old='$old_two' new='$new_two'"
+          $two = @(Get-Installs)
+          $two_v = ($two | ForEach-Object { $_.Version }) -join ', '
+          Write-Host "after 1.0.2: $($two.Count) install(s), versions: $two_v"
 
           # best-effort cleanup so the runner is left clean
           Start-Process msiexec -Wait -PassThru -ArgumentList @(
             '/x', "`"$($msis['1.0.2'])`"", '/qn', '/norestart') | Out-Null
 
-          if (-not $old_one) { throw '1.0.1 did not install' }
-          if ($old_two) {
-            throw 'the 1.0.2 upgrade left the old product installed'
+          if ($one.Count -ne 1 -or $one[0].Version -ne '1.0.1') {
+            throw "after 1.0.1 expected one 1.0.1 install, got $($one.Count)"
           }
-          if (-not $new_two) { throw '1.0.2 did not install' }
+          if ($two.Count -ne 1 -or $two[0].Version -ne '1.0.2') {
+            throw ("the 1.0.2 upgrade should leave one 1.0.2 install, got " +
+              "$($two.Count): $two_v")
+          }
           Write-Host 'upgrade replaces the previous version: ok'
       - uses: actions/upload-artifact@v7
         with:
