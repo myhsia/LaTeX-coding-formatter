@@ -34,7 +34,7 @@
     <CustomAction Id="AskCoverVersion"
                   BinaryRef="ConfirmUpgradeVbs"
                   VBScriptCall="ConfirmCoverVersion"
-                  Execute="immediate" Return="check" />
+                  Execute="immediate" Return="ignore" />
     <CustomAction Id="CoverVersionAbort"
                   Error="Upgrade cancelled by the user." />
 
