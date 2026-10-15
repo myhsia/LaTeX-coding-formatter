@@ -484,17 +484,20 @@ jobs:
             $view.Close()
             $code
           }
-          function Test-Installed($code) {
-            try { return [bool]$installer.ProductInfo($code, 'ProductName') }
-            catch { return $false }
+          function Get-Installed($code) {
+            try { return [string]$installer.ProductInfo($code, 'VersionString') }
+            catch { return '' }
           }
           function Install-Msi($path) {
+            $log = "$path.log"
             $p = Start-Process msiexec -Wait -PassThru -ArgumentList @(
-              '/i', "`"$path`"", '/qn', '/norestart', '/l*v', "`"$path.log`"")
+              '/i', "`"$path`"", '/qn', '/norestart', '/l*v', "`"$log`"")
+            Write-Host "msiexec exit $($p.ExitCode); log $log"
+            Get-Content $log -Tail 25 -ErrorAction SilentlyContinue |
+              Where-Object { $_ -match 'status|error|Product:|ALLUSERS|INSTALL|Note: 1:' } |
+              Select-Object -Last 12 | ForEach-Object { Write-Host "   log: $_" }
             # 0 = ok, 3010 = success (reboot recommended)
             if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
-              Get-Content "$path.log" -Tail 40 -ErrorAction SilentlyContinue |
-                Write-Host
               throw "msiexec /i $path failed (exit $($p.ExitCode))"
             }
           }
@@ -505,19 +508,20 @@ jobs:
           if ($old_code -eq $new_code) {
             throw 'the two builds share a ProductCode (not a major upgrade)'
           }
-          if ((Test-Installed $old_code) -or (Test-Installed $new_code)) {
+          if ((Get-Installed $old_code) -or (Get-Installed $new_code)) {
             throw 'a test product is already installed'
           }
 
           Install-Msi $msis['1.0.1']
-          $old_one = Test-Installed $old_code
-          $new_one = Test-Installed $new_code
-          Write-Host "after 1.0.1: old installed=$old_one new installed=$new_one"
+          $old_one = Get-Installed $old_code
+          $new_one = Get-Installed $new_code
+          $gui = Join-Path $env:LOCALAPPDATA 'LaTeX Coding Style Formatter\format-tex-gui.exe'
+          Write-Host "after 1.0.1: old='$old_one' new='$new_one' gui=$(Test-Path $gui)"
 
           Install-Msi $msis['1.0.2']
-          $old_two = Test-Installed $old_code
-          $new_two = Test-Installed $new_code
-          Write-Host "after 1.0.2: old installed=$old_two new installed=$new_two"
+          $old_two = Get-Installed $old_code
+          $new_two = Get-Installed $new_code
+          Write-Host "after 1.0.2: old='$old_two' new='$new_two'"
 
           # best-effort cleanup so the runner is left clean
           Start-Process msiexec -Wait -PassThru -ArgumentList @(
